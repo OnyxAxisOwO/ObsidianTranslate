@@ -75,16 +75,19 @@ npm run package
 
 Chrome、Firefox、Safari 的开发安装包输出到 `dist/release/v<版本>/`。ZIP 的根目录包含 `manifest.json`。Chrome 解压后加载目录，Firefox 可临时载入，Safari 可选取 ZIP 或解压后的目录进行临时开发安装。浏览器商店各自的签名和审核是独立流程。
 
-版本号取自 `package.json`。日常改动正常提交，发版时更新版本、打包检查、提交版本改动，再创建同名 Git 标签。例如：
+版本号取自 `package.json`。发版时把完整的更新日志写入 [CHANGELOG.md](CHANGELOG.md)，使用 `## [版本号]` 作为标题，也可在标题后附上发布日期。以上一版实际发布的功能和行为为基准，核对这次用户会看到的变化。同一发版周期内引入又修掉的问题无需单列。
+
+更新版本号和日志后，打包检查，一并提交，再创建同名 Git 标签。下面以 `0.0.2` 为例：
 
 ```sh
-npm version 0.0.1 --no-git-tag-version
+npm version 0.0.2 --no-git-tag-version
+node scripts/release-notes.mjs
 npm run package
-git add package.json package-lock.json
-git commit -m "Release v0.0.1"
-git tag -a v0.0.1 -m "Obsidian Translate 0.0.1"
+git add package.json package-lock.json CHANGELOG.md
+git commit -m "Release v0.0.2"
+git tag -a v0.0.2 -m "Obsidian Translate 0.0.2"
 git push origin main
-git push origin v0.0.1
+git push origin v0.0.2
 ```
 
-推送标签后，唯一的发版工作流会核对版本、构建 ZIP，并将三个安装包附在同名 GitHub Release 下。
+推送标签后，发版工作流会核对版本和更新日志，构建 ZIP，再用对应版本条目作为 GitHub Release 正文并附上三个安装包。
