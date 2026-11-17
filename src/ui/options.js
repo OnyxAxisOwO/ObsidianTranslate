@@ -1,4 +1,4 @@
-import { activeModel, languages, modelKey, needsKey, promptDefaults, protocols } from '../shared/settings.js';
+import { activeModel, languages, loadingStyles, loadingTextLimit, modelKey, needsKey, promptDefaults, protocols } from '../shared/settings.js';
 import { icon } from '../shared/icons.js';
 import { api } from './api.js';
 import { escape, iconButton, languageOptions, option } from './helpers.js';
@@ -113,6 +113,10 @@ function renderReading() {
       ${select('view', '显示方式', '', showOptions('view', ['translation', '仅译文'], ['bilingual', '双语对照']))}
       ${select('order', '双语顺序', '', showOptions('order', ['original-first', '原文在前'], ['translation-first', '译文在前']))}
       ${select('style', '双语译文样式', '', showOptions('style', ['plain', '与正文相同'], ['soft', '淡化'], ['accent', '淡色底纹']))}
+      ${select('loadingStyle', '翻译中提示', '显示在等待译文的段落后面。', showOptions('loadingStyle', ...Object.entries(loadingStyles)))}
+      <div id="loading-text-row" ${settings.loadingStyle === 'text' ? '' : 'hidden'}>
+        ${row('提示文字', '', `<input type="text" data-pref="loadingText" aria-label="提示文字" maxlength="${loadingTextLimit}" value="${escape(settings.loadingText)}">`)}
+      </div>
       ${select('scope', '翻译范围', '正文优先翻译文章和页面主区。', showOptions('scope', ['reading', '正文'], ['whole', '整页']))}
     `)}
     ${group('网页工具', `
@@ -269,7 +273,7 @@ function providerForm(provider) {
     <label>API 格式<select name="protocol">${Object.entries(protocols).map(([key, value]) => option(key, value.name, item.protocol)).join('')}</select></label>
     <label>Base URL<input name="baseUrl" type="url" required maxlength="2000" value="${escape(item.baseUrl)}"></label>
     <label>API Key<input name="apiKey" type="password" maxlength="4000" autocomplete="off" value="${DEMO ? '' : escape(item.apiKey)}" placeholder="无鉴权的本地服务可留空"></label>
-    <label>每秒最大请求数<input name="rps" type="number" required min="0.2" max="20" step="0.1" value="${item.rps}"></label>
+    <label>每秒最大请求数<input name="rps" type="number" required min="0" step="any" value="${item.rps}"></label>
     <div class="dialog-actions">${provider ? button('delete-provider', '删除服务商', 'trash', 'danger ghost') : ''}
       ${button('close', '取消', '', 'ghost')}<button class="button primary">保存</button></div>
     <p class="form-status" role="status"></p></form>`);
@@ -437,6 +441,10 @@ document.addEventListener('change', async event => {
   if (!field.dataset.pref || field.dataset.pref === 'fileTarget') return;
   try {
     settings = await api('preferences', { patch: { [field.dataset.pref]: field.type === 'checkbox' ? field.checked : field.value } });
+    if (field.dataset.pref === 'loadingStyle') {
+      container.querySelector('#loading-text-row')?.toggleAttribute('hidden', settings.loadingStyle !== 'text');
+    }
+    if (field.dataset.pref === 'loadingText') field.value = settings.loadingText;
   } catch (error) {
     notify(error.message);
     draw();
@@ -503,6 +511,7 @@ document.addEventListener('submit', async event => {
     const data = new FormData(form);
     const type = form.dataset.form;
     if (type === 'provider') {
+      if (!(form.elements.rps.valueAsNumber > 0)) throw new Error('每秒最大请求数必须大于 0。');
       const prior = settings.providers.find(item => item.id === form.dataset.id);
       await saveProvider({ ...prior, ...Object.fromEntries(data) });
     } else if (type === 'model' || type === 'import') {

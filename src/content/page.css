@@ -20,3 +20,45 @@
   display: inline !important;
   margin: 0 0 0 .4em;
 }
+
+[data-obsidian-loading] {
+  display: inline-flex !important;
+  align-items: center;
+  margin-inline-start: .45em;
+  vertical-align: middle;
+  font: inherit;
+  color: inherit;
+  opacity: .65;
+  pointer-events: none;
+  user-select: none;
+}
+[data-obsidian-loading="spinner"]::before {
+  content: '';
+  box-sizing: border-box;
+  width: .8em;
+  height: .8em;
+  border: .095em solid currentColor;
+  border-inline-end-color: transparent;
+  border-radius: 50%;
+  animation: obsidian-loading-spin .8s linear infinite;
+}
+[data-obsidian-loading="dots"] {
+  gap: .17em;
+}
+[data-obsidian-loading="dots"] > span {
+  display: block !important;
+  width: .19em;
+  height: .19em;
+  border-radius: 50%;
+  background: currentColor;
+  animation: obsidian-loading-pulse 1.2s ease-in-out infinite;
+}
+[data-obsidian-loading="dots"] > span:nth-child(2) { animation-delay: .15s; }
+[data-obsidian-loading="dots"] > span:nth-child(3) { animation-delay: .3s; }
+[data-obsidian-loading="text"] { font-size: .8em; }
+@keyframes obsidian-loading-spin { to { transform: rotate(1turn); } }
+@keyframes obsidian-loading-pulse { 0%, 65%, 100% { opacity: .35; } 30% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  [data-obsidian-loading="spinner"]::before,
+  [data-obsidian-loading="dots"] > span { animation: none; }
+}

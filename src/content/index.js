@@ -6,6 +6,7 @@ import { overlay } from './overlay.js';
 const reading = 'p,h1,h2,h3,h4,h5,h6,li,dt,dd,td,th,figcaption,caption,blockquote,summary';
 const block = `${reading},div,span,a,button,label`;
 const ignored = 'script,style,noscript,textarea,input,select,option,pre,code,svg,math,[hidden],[inert],[aria-hidden="true"],[contenteditable]:not([contenteditable="false"]),[translate="no"],[data-obsidian-interface]';
+const ownedNodes = '[data-obsidian-loading],[data-obsidian-translation],[data-obsidian-source],[data-obsidian-interface]';
 const peripheral = 'nav,aside,footer,[role="navigation"],[role="complementary"],[role="banner"]';
 const primary = 'main,article,[role="main"]';
 let settings = defaults;
@@ -40,6 +41,7 @@ const near = new IntersectionObserver(entries => {
     if (!queue.has(entry.target)) continue;
     if (entry.isIntersecting) urgent.add(entry.target);
     else urgent.delete(entry.target);
+    updateLoading(entry.target, rows.get(entry.target));
   }
   schedulePump(0);
 }, { rootMargin: '280px 0px' });
@@ -178,7 +180,39 @@ function qualifies(el, force = false) {
   return true;
 }
 
+function clearLoading(row) {
+  row.indicator?.remove();
+  row.indicator = undefined;
+}
+
+function updateLoading(el, row) {
+  if (!row) return;
+  const style = settings.loadingStyle;
+  if (style === 'off' || !el.isConnected || (!row.pending && (paused || !urgent.has(el)))) {
+    clearLoading(row);
+    return;
+  }
+  if (!row.indicator) {
+    row.indicator = document.createElement('span');
+    row.indicator.translate = false;
+    row.indicator.dir = 'auto';
+    row.indicator.setAttribute('aria-hidden', 'true');
+  }
+  const indicator = row.indicator;
+  if (indicator.dataset.obsidianLoading !== style) {
+    indicator.dataset.obsidianLoading = style;
+    if (style === 'dots') {
+      indicator.replaceChildren(...Array.from({ length: 3 }, () => document.createElement('span')));
+    } else {
+      indicator.replaceChildren();
+    }
+  }
+  if (style === 'text' && indicator.textContent !== settings.loadingText) indicator.textContent = settings.loadingText;
+  if (indicator.parentNode !== el) el.append(indicator);
+}
+
 function erase(el, row) {
+  clearLoading(row);
   row.output?.remove();
   if (row.source?.parentNode === el) row.source.replaceWith(...row.source.childNodes);
   row.source = row.output = null;
@@ -187,6 +221,7 @@ function erase(el, row) {
 function render(el, row) {
   if (!row.text || !el.isConnected) return;
   if (row.text === row.original) return erase(el, row);
+  clearLoading(row);
   if (view === 'translation') {
     if (row.source?.parentNode !== el) {
       row.source = document.createElement('span');
@@ -249,9 +284,13 @@ function add(el, force = false) {
   }
   if (original.length < (force || scope === 'whole' ? 1 : 2) || original.length > 100000 || !/\p{L}/u.test(original)) return;
   if (!force && el.getClientRects().length === 0) return;
-  rows.set(el, { original, links });
+  const row = { original, links };
+  rows.set(el, row);
   queue.add(el);
-  if (force) urgent.add(el);
+  if (force) {
+    urgent.add(el);
+    updateLoading(el, row);
+  }
   near.observe(el);
 }
 
@@ -296,13 +335,24 @@ function stop() {
   status();
 }
 
+function pumpCapacity() {
+  return Math.max(2, Math.ceil(settings.requestsPerSecond ?? 2));
+}
+
 function schedulePump(delay = 110) {
   clearTimeout(pumpTimer);
-  if (!paused && (running || urgent.size) && queue.size && held < 2) pumpTimer = setTimeout(pump, delay);
+  if (!paused && (running || urgent.size) && queue.size && held < pumpCapacity()) pumpTimer = setTimeout(pump, delay);
+}
+
+function pauseAfterError(message) {
+  paused = true;
+  for (const el of urgent) updateLoading(el, rows.get(el));
+  status(message);
+  if (!running) ui.hint(message);
 }
 
 async function pump() {
-  if (paused || held >= 2 || (!running && !urgent.size)) return;
+  if (paused || held >= pumpCapacity() || (!running && !urgent.size)) return;
   const chunk = [];
   let length = 0;
   for (const el of [...new Set([...urgent, ...(running ? queue : [])])]) {
@@ -317,6 +367,10 @@ async function pump() {
   if (!chunk.length) return;
   const version = generation;
   held++;
+  for (const [el, row] of chunk) {
+    row.pending = true;
+    updateLoading(el, row);
+  }
   status();
   schedulePump(0);
   try {
@@ -337,24 +391,22 @@ async function pump() {
         render(el, row);
       }
     });
-    if (firstError) {
-      paused = true;
-      status(firstError);
-      if (!running) ui.hint(firstError);
-    }
+    if (firstError) pauseAfterError(firstError);
   } catch (error) {
     if (version !== generation) return;
     for (const [el, row] of chunk) {
       if (rows.get(el) === row) rows.delete(el);
     }
     failures += chunk.length;
-    paused = true;
-    status(error.message);
-    if (!running) ui.hint(error.message);
+    pauseAfterError(error.message);
   } finally {
+    for (const [, row] of chunk) {
+      row.pending = false;
+      clearLoading(row);
+    }
     held--;
     if (!paused) status();
-    schedulePump(urgent.size ? 0 : 120);
+    schedulePump(0);
   }
 }
 
@@ -505,6 +557,10 @@ async function sync(navigated = false) {
     view = settings.view;
     for (const [el, row] of rows) render(el, row);
   }
+  if (previous.loadingStyle !== settings.loadingStyle || previous.loadingText !== settings.loadingText) {
+    for (const [el, row] of rows) updateLoading(el, row);
+  }
+  if (previous.requestsPerSecond !== settings.requestsPerSecond) schedulePump(0);
   if (restart) captions(false);
   captions(!!settings.configured && settings.captions && siteRule() !== 'never');
   if (siteRule() === 'never' || !settings.configured || (autoSession && autoRule() === 'never')) {
@@ -536,20 +592,21 @@ const watcher = new MutationObserver(records => {
     sync(true).catch(showError);
   }
   if (!running) return;
-  for (const { target, addedNodes } of records) {
+  for (const { target, addedNodes, removedNodes } of records) {
     const element = target instanceof Element ? target : target.parentElement;
     const el = element?.closest('[data-obsidian-source]')?.parentElement || element;
     if (!el || el.closest(ignored)) continue;
-    if (addedNodes.length && [...addedNodes].every(node =>
-      node instanceof Element && node.matches('[data-obsidian-translation],[data-obsidian-source],[data-obsidian-interface]'))) continue;
+    if ((addedNodes.length || removedNodes.length) &&
+      [...addedNodes, ...removedNodes].every(node => node instanceof Element && node.matches(ownedNodes))) continue;
     changes.add(el);
   }
   if (!changes.size || mutationTimer) return;
   mutationTimer = setTimeout(() => {
     mutationTimer = undefined;
-    for (const [el] of rows) {
+    for (const [el, row] of rows) {
       if (el.isConnected) continue;
       urgentlyRemove(el);
+      clearLoading(row);
       rows.delete(el);
     }
     hasPrimary = !!document.querySelector(primary);
@@ -605,7 +662,10 @@ document.addEventListener('keydown', event => {
       !settings.hover || !settings.configured || siteRule() === 'never' || !hoverTarget || field) return;
   paused = false;
   add(hoverTarget, true);
-  if (queue.has(hoverTarget)) urgent.add(hoverTarget);
+  if (queue.has(hoverTarget)) {
+    urgent.add(hoverTarget);
+    updateLoading(hoverTarget, rows.get(hoverTarget));
+  }
   schedulePump(0);
 });
 

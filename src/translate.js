@@ -7,36 +7,44 @@ const queues = new Map();
 const pending = new Map();
 let cacheEpoch = 0;
 
+function pumpRequests(queue) {
+  if (queue.timer !== undefined) return;
+  const now = performance.now();
+  // Account for a timer waking slightly late at high rates without catching up after a long suspension.
+  const timerSlack = Math.max(0, 4 - queue.interval);
+  while (queue.waiting.length && queue.nextAt <= now) {
+    const { run, resolve, reject } = queue.waiting.shift();
+    queue.lastStart = now;
+    queue.nextAt = Math.max(queue.nextAt, now - timerSlack) + queue.interval;
+    Promise.resolve().then(run).then(resolve, reject);
+  }
+  if (queue.waiting.length) {
+    const delay = Math.min(0x7fff_ffff, Math.ceil(queue.nextAt - now));
+    queue.timer = setTimeout(() => {
+      queue.timer = undefined;
+      pumpRequests(queue);
+    }, delay);
+  }
+}
+
 export function schedule(provider, run) {
+  const interval = 1000 / provider.rps;
   let queue = queues.get(provider.id);
   if (!queue) {
-    queue = { interval: 0, last: 0, active: 0, waiting: [], timer: undefined };
+    queue = { interval, nextAt: 0, lastStart: undefined, waiting: [], timer: undefined };
     queues.set(provider.id, queue);
+  } else if (queue.interval !== interval) {
+    queue.interval = interval;
+    queue.nextAt = queue.lastStart === undefined ? 0 : queue.lastStart + interval;
+    clearTimeout(queue.timer);
+    queue.timer = undefined;
+    pumpRequests(queue);
   }
-  queue.interval = 1000 / provider.rps;
-  const pump = () => {
-    if (queue.timer || !queue.waiting.length || queue.active >= 4) return;
-    const wait = Math.ceil(queue.last + queue.interval - Date.now());
-    if (wait > 0) {
-      queue.timer = setTimeout(() => {
-        queue.timer = undefined;
-        pump();
-      }, wait);
-      return;
-    }
-    const { run, resolve, reject } = queue.waiting.shift();
-    queue.last = Date.now();
-    queue.active++;
-    Promise.resolve().then(run).then(resolve, reject).finally(() => {
-      queue.active--;
-      pump();
-    });
-    pump();
-  };
   return new Promise((resolve, reject) => {
     if (queue.waiting.length >= 100) return reject(new Error('翻译请求过多，请稍候重试。'));
+    if (!queue.waiting.length) queue.nextAt = Math.max(queue.nextAt, performance.now());
     queue.waiting.push({ run, resolve, reject });
-    pump();
+    pumpRequests(queue);
   });
 }
 

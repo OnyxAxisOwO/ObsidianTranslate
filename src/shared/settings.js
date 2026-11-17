@@ -18,6 +18,15 @@ const openAI = {
   updated: 1,
 };
 
+export const loadingStyles = {
+  spinner: '转圈',
+  dots: '三点',
+  text: '自定义文字',
+  off: '不显示',
+};
+
+export const loadingTextLimit = 60;
+
 export const defaults = {
   providers: [openAI],
   activeModel: '',
@@ -27,6 +36,8 @@ export const defaults = {
   view: 'translation',
   order: 'original-first',
   style: 'soft',
+  loadingStyle: 'spinner',
+  loadingText: '翻译中…',
   scope: 'reading',
   maxLength: 5000,
   batchSize: 6,
@@ -123,6 +134,7 @@ export function pageSettings({ providers, sites, ...settings }, hostname) {
       provider: provider.name,
     }))),
     configured: !!active && !needsKey(active.provider),
+    requestsPerSecond: active?.provider.rps ?? openAI.rps,
     revision: modelRevision({ providers, activeModel: settings.activeModel }),
   };
 }
@@ -161,13 +173,14 @@ export function normalizeProvider(item) {
   } catch {
     throw new Error('请输入有效的 Base URL，例如 https://api.openai.com/v1。');
   }
+  const rps = Number(item.rps);
   return {
     id: text(item.id, 80) || crypto.randomUUID(),
     name: text(item.name, 80),
     protocol: item.protocol,
     baseUrl,
     apiKey: text(item.apiKey, 4000),
-    rps: number(item.rps, 2, 0.2, 20, 0.1),
+    rps: Number.isFinite(rps) && rps > 0 ? rps : openAI.rps,
     models: [...models.values()],
     updated: Number(item.updated) || Date.now(),
   };
@@ -195,6 +208,8 @@ export function normalizeSettings(input = {}) {
   if (['bilingual', 'translation'].includes(input.view)) settings.view = input.view;
   if (['original-first', 'translation-first'].includes(input.order)) settings.order = input.order;
   if (['plain', 'soft', 'accent'].includes(input.style)) settings.style = input.style;
+  if (own(loadingStyles, input.loadingStyle)) settings.loadingStyle = input.loadingStyle;
+  settings.loadingText = text(input.loadingText, loadingTextLimit) || defaults.loadingText;
   if (['reading', 'whole'].includes(input.scope)) settings.scope = input.scope;
   settings.maxLength = number(input.maxLength, defaults.maxLength, 300, 12000);
   settings.batchSize = number(input.batchSize, defaults.batchSize, 1, 20);

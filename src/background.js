@@ -5,7 +5,7 @@ import { ext, reply } from './shared/webext.js';
 
 const uiProtocol = ext.runtime.getURL('/');
 const pagePrefs = ['source', 'target', 'activeModel', 'view', 'scope', 'captions'];
-const prefs = [...pagePrefs, 'inputTarget', 'order', 'style', 'maxLength', 'batchSize',
+const prefs = [...pagePrefs, 'inputTarget', 'order', 'style', 'loadingStyle', 'loadingText', 'maxLength', 'batchSize',
   'glossary', 'floating', 'selection', 'hover', 'inputSpaces', 'cache', ...Object.keys(promptDefaults)];
 const optionPages = ['reading', 'text', 'files', 'advanced', 'advanced/models', 'advanced/prompts', 'advanced/rules', 'advanced/cache'];
 let writes = Promise.resolve();
