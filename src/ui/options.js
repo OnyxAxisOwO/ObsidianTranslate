@@ -11,6 +11,7 @@ const toast = document.querySelector('#toast');
 const sections = {
   models: ['服务商与模型', 'stack'],
   reading: ['网页翻译', 'globe'],
+  floating: ['悬浮窗', 'sliders'],
   text: ['文本翻译', 'translate'],
   files: ['文件翻译', 'file'],
   advanced: ['高级设置', 'settings'],
@@ -120,7 +121,8 @@ function renderReading() {
       ${select('scope', '翻译范围', '正文优先翻译文章和页面主区。', showOptions('scope', ['reading', '正文'], ['whole', '整页']))}
     `)}
     ${group('网页工具', `
-      ${toggle('floating', '网页悬浮窗', '在网页右下角打开翻译菜单。')}
+      ${toggle('floating', '网页悬浮窗', '单击侧边悬浮球翻译，靠近后可打开设置菜单。')}
+      ${row('悬浮窗设置', '调整停靠位置、透明度和隐藏的网站。', '<a class="button" href="#floating">打开设置</a>')}
       ${toggle('selection', '划词翻译', '选中文字后显示翻译按钮。')}
       ${toggle('hover', '悬停翻译', '鼠标指向文段时按 Shift 翻译。')}
       ${toggle('captions', '双语字幕', '在 YouTube 和兼容播放器打开原字幕后显示译文。')}
@@ -128,6 +130,25 @@ function renderReading() {
     ${group('输入框', `
       ${select('inputTarget', '输入框目标语言', '在输入框中按 Option / Alt + Shift + I 翻译。', languageOptions(settings.inputTarget))}
       ${toggle('inputSpaces', '连按三次空格翻译', '也可以输入 /ja 或 /en 指定目标语言，或用 // 标记只翻译其后的文字。')}
+    `)}
+  </div>`;
+}
+
+function renderFloating() {
+  return heading('悬浮窗', '在浏览器侧边快速翻译，鼠标靠近时显示设置按钮。') + `<div class="preferences">
+    ${group('显示与位置', `
+      ${toggle('floating', '显示悬浮球', '关闭后仍可通过工具栏和快捷键翻译。')}
+      ${select('floatingSide', '停靠侧边', '', showOptions('floatingSide', ['left', '左侧'], ['right', '右侧']))}
+      ${select('floatingPosition', '垂直位置', '', [25, 55, 80].map(value =>
+        option(String(value), {25:'靠上',55:'居中',80:'靠下'}[value], String(settings.floatingPosition))).join(''))}
+      ${select('floatingOpacity', '闲置透明度', '鼠标靠近或用键盘聚焦时完全显示。', [0.2,0.35,0.5,0.7,1].map(value =>
+        option(String(value), Math.round(value * 100) + '%', String(settings.floatingOpacity))).join(''))}
+    `)}
+    ${group('在这些网站隐藏', `
+      ${settings.hiddenFloatingSites.map((host, index) => row(escape(host), '',
+        `<button class="button ghost" type="button" data-action="show-floating-site" data-index="${index}">恢复显示</button>`)).join('')}
+      ${row('隐藏的网站', '隐藏后仍可使用浏览器工具栏和快捷键翻译。',
+        button('new-floating-site', '添加网站', 'plus'))}
     `)}
   </div>`;
 }
@@ -233,7 +254,7 @@ function renderAdvanced() {
         <span><strong>${name}</strong><small>${description}</small></span>${icon('right')}</a>`).join(''))}</div>`;
 }
 
-const screens = { reading: renderReading, text: renderText, files: renderFiles, advanced: renderAdvanced,
+const screens = { reading: renderReading, floating: renderFloating, text: renderText, files: renderFiles, advanced: renderAdvanced,
   models: renderModels, prompts: renderPrompts, rules: renderRules, cache: renderCache };
 
 function draw() {
@@ -388,6 +409,14 @@ async function action(name, index, control) {
     case 'edit-model': return modelForm(index);
     case 'discover': return importModels(provider);
     case 'new-site': return siteForm();
+    case 'new-floating-site':
+      return modal('在网站隐藏悬浮窗', `<form data-form="floating-site" class="editor-fields">
+        <label>域名或完整网址<input name="host" placeholder="example.com" required autofocus></label>
+        <div class="dialog-actions">${button('close', '取消', '', 'ghost')}<button class="button primary">保存</button></div>
+        <p class="form-status" role="status"></p></form>`);
+    case 'show-floating-site':
+      settings = await api('floating-site', { host: settings.hiddenFloatingSites[index], hidden: false });
+      return draw();
     case 'new-language': return siteForm(true);
     case 'delete-language':
       settings = await api('language-rule', { language: Object.keys(settings.languageRules)[index] });
@@ -536,11 +565,13 @@ document.addEventListener('submit', async event => {
         } else models.push(model);
       }
       await saveProvider({ ...provider, models }, replaceActive);
-    } else if (type === 'site') {
+    } else if (type === 'site' || type === 'floating-site') {
       const address = data.get('host').trim();
       const url = new URL(address.includes('://') ? address : 'https://' + address);
       if (!['https:', 'http:'].includes(url.protocol) || !url.hostname) throw new Error('请输入有效的网页域名。');
-      settings = await api('site-rule', { host: url.hostname, rule: data.get('rule') });
+      settings = type === 'site'
+        ? await api('site-rule', { host: url.hostname, rule: data.get('rule') })
+        : await api('floating-site', { host: url.hostname, hidden: true });
       editor.close();
       draw();
     } else if (type === 'language') {
@@ -571,12 +602,23 @@ document.addEventListener('submit', async event => {
   }
 });
 
+let settingsRead = 0;
+async function refreshSettings() {
+  const read = ++settingsRead;
+  const value = await api('settings');
+  if (read !== settingsRead) return;
+  settings = value;
+  draw();
+}
+
 window.addEventListener('hashchange', () => {
   fileRun?.abort();
   if (editor.open) editor.close();
-  if (settings) draw();
+  refreshSettings().catch(error => notify(error.message));
 });
-api('settings').then(value => {
-  settings = value;
-  draw();
-}).catch(error => { container.textContent = error.message; });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && section === 'floating' && !editor.open) {
+    refreshSettings().catch(error => notify(error.message));
+  }
+});
+refreshSettings().catch(error => { container.textContent = error.message; });

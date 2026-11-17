@@ -44,6 +44,10 @@ export const defaults = {
   ...promptDefaults,
   glossary: '',
   floating: true,
+  floatingSide: 'right',
+  floatingPosition: 55,
+  floatingOpacity: 0.35,
+  hiddenFloatingSites: [],
   selection: true,
   hover: true,
   inputSpaces: false,
@@ -123,11 +127,12 @@ export function modelRevision(settings) {
   return active ? JSON.stringify([active.provider.id, active.provider.updated, active.model.id, active.model.parameters]) : '';
 }
 
-export function pageSettings({ providers, sites, ...settings }, hostname) {
+export function pageSettings({ providers, sites, hiddenFloatingSites, ...settings }, hostname) {
   const active = activeModel({ providers, activeModel: settings.activeModel });
   return {
     ...settings,
     sites: own(sites, hostname) ? { [hostname]: sites[hostname] } : {},
+    hiddenFloatingSites: hiddenFloatingSites.includes(hostname) ? [hostname] : [],
     models: providers.flatMap(provider => provider.models.map(model => ({
       key: modelKey(provider, model),
       name: model.name,
@@ -233,6 +238,12 @@ export function normalizeSettings(input = {}) {
     settings[key] = text(input[key] ?? (key === 'translationPrompt' ? input.prompt : ''), 6000) || fallback;
   }
   settings.glossary = text(input.glossary, 4000);
+  if (['left', 'right'].includes(input.floatingSide)) settings.floatingSide = input.floatingSide;
+  settings.floatingPosition = number(input.floatingPosition, defaults.floatingPosition, 10, 90);
+  settings.floatingOpacity = Number(number(input.floatingOpacity, defaults.floatingOpacity, 0.1, 1, 0.05).toFixed(2));
+  settings.hiddenFloatingSites = [...new Set(Array.isArray(input.hiddenFloatingSites)
+    ? input.hiddenFloatingSites.filter(host => typeof host === 'string' && /^[-\w.:[\]]{1,255}$/.test(host)).slice(0, 300)
+    : [])];
   for (const key of ['floating', 'selection', 'hover', 'inputSpaces', 'captions', 'cache']) {
     if (typeof input[key] === 'boolean') settings[key] = input[key];
   }

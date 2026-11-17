@@ -11,13 +11,27 @@ button:hover { background: var(--soft); } button:active { transform: scale(.96);
 button:focus-visible { outline: 2px solid #858591; outline-offset: 2px; }
 svg { width: 18px; height: 18px; vertical-align: middle; flex: none; }
 .anchor, .tip { position: fixed; pointer-events: auto; }
-.anchor { right: max(20px, env(safe-area-inset-right)); bottom: max(28px, env(safe-area-inset-bottom)); display: grid; justify-items: end; gap: 9px; }
-.orb { width: 45px; height: 45px; border-radius: 16px; color: var(--on-strong); background: var(--strong); box-shadow: 0 4px 18px #0003; }
-.orb:hover { background: var(--strong); transform: translateY(-2px); }
-.orb svg { width: 22px; height: 22px; }
+.anchor { right: 0; top: 55%; transform: translateY(-50%); width: 52px; padding: 13px 0 13px 13px; }
+.anchor[data-side="left"] { left: 0; right: auto; padding: 13px 13px 13px 0; }
+.dock { display: grid; justify-items: center; gap: 5px; opacity: var(--idle-opacity, .35); transform: translateX(8px); transition: opacity .2s, transform .24s cubic-bezier(.2,.75,.2,1); }
+.anchor[data-side="left"] .dock { transform: translateX(-8px); }
+.anchor:is(:hover, :has(:focus-visible), [data-open]) .dock { opacity: 1; transform: none; }
+.orb { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border-radius: 50%; color: var(--on-strong); background: var(--strong); box-shadow: 0 2px 9px #0002; }
+.orb:hover { background: var(--strong); }
+.orb svg { width: 18px; height: 18px; }
+.dock-settings { display: grid; place-items: center; padding: 0; width: 23px; height: 23px; border-radius: 50%; background: var(--surface); box-shadow: 0 2px 8px #0002; opacity: 0; visibility: hidden; transition: opacity .18s, visibility .18s; }
+.dock-settings svg { width: 13px; height: 13px; }
+.anchor:is(:hover, :has(:focus-visible), [data-open]) .dock-settings { opacity: 1; visibility: visible; }
+.ot-floating { position: fixed; right: 48px; z-index: 1; max-width: calc(100vw - 60px); max-height: calc(100dvh - 16px); pointer-events: auto; }
+.ot-floating .ot-main, .ot-floating .ot-details { max-width: calc(100vw - 64px); }
+.ot-floating .ot-main { max-height: calc(100dvh - 16px); overflow: auto; }
+@media (hover: none) {
+  .dock { opacity: .85; transform: none !important; }
+  .dock-settings { opacity: 1; visibility: visible; }
+}
 .tip { background: var(--surface); border-radius: 16px; box-shadow: 0 6px 35px #0002, 0 2px 7px #0001; animation: reveal .22s cubic-bezier(.2,.8,.2,1) both; }
 .ot-floating { animation: reveal .22s cubic-bezier(.2,.8,.2,1) both; }
-.ot-floating .ot-details { order: -1; }
+.ot-floating[data-side="right"] .ot-details { order: -1; }
 .tip { left: 0; top: 0; max-width: min(350px, calc(100vw - 16px)); max-height: min(48vh, 420px); padding: 5px; overflow: auto; }
 .tip header { display: flex; align-items: center; justify-content: space-between; padding-left: 9px; font-weight: 650; }
 .tip p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 3px 9px 8px; }
@@ -33,16 +47,41 @@ export function overlay(action) {
   host.dataset.obsidianInterface = '';
   const shadow = host.attachShadow({ mode: 'closed' });
   shadow.innerHTML = `<style>${style}
-${panelStyle}</style><div class="root"><div class="anchor" hidden>
-    <div class="ot-floating" hidden></div>
-    <button type="button" class="orb" data-action="panel" aria-label="网页翻译菜单" aria-expanded="false">${icon('translate')}</button>
-  </div><div class="tip" hidden></div><div class="caption" hidden></div></div>`;
+${panelStyle}</style><div class="root"><div class="anchor" data-side="right" hidden>
+    <div class="dock">
+      <button type="button" class="orb" data-action="toggle" aria-label="翻译网页" title="翻译网页">${icon('translate')}</button>
+      <button type="button" class="dock-settings" data-action="panel" aria-label="打开翻译菜单" title="打开翻译菜单" aria-expanded="false">${icon('settings')}</button>
+    </div>
+  </div><div class="ot-floating" data-side="right" hidden></div><div class="tip" hidden></div><div class="caption" hidden></div></div>`;
   document.documentElement.append(host);
   const find = selector => shadow.querySelector(selector);
   const anchor = find('.anchor');
   const panel = find('.ot-floating');
   const controls = mountPanel(panel, action);
   const orb = find('.orb');
+  const settingsButton = find('.dock-settings');
+
+  function placePanel() {
+    if (panel.hidden) return;
+    const side = anchor.dataset.side;
+    panel.dataset.side = side;
+    panel.style.right = side === 'right' ? '48px' : 'auto';
+    panel.style.left = side === 'left' ? '48px' : 'auto';
+    const top = Math.max(8, Math.min(anchor.getBoundingClientRect().top, innerHeight - panel.offsetHeight - 8));
+    panel.style.top = top + 'px';
+  }
+
+  function closePanel() {
+    panel.hidden = true;
+    anchor.removeAttribute('data-open');
+    settingsButton.setAttribute('aria-expanded', 'false');
+  }
+
+  new ResizeObserver(placePanel).observe(panel);
+  window.addEventListener('resize', placePanel, { passive: true });
+  document.addEventListener('pointerdown', event => {
+    if (!event.composedPath().includes(host)) closePanel();
+  }, { passive: true });
   const tip = find('.tip');
   const caption = find('.caption');
 
@@ -51,7 +90,9 @@ ${panelStyle}</style><div class="root"><div class="anchor" hidden>
     if (!command) return;
     if (command === 'panel') {
       panel.hidden = !panel.hidden;
-      orb.setAttribute('aria-expanded', String(!panel.hidden));
+      anchor.toggleAttribute('data-open', !panel.hidden);
+      settingsButton.setAttribute('aria-expanded', String(!panel.hidden));
+      placePanel();
     } else if (command === 'close-tip') {
       tip.hidden = true;
     } else {
@@ -65,12 +106,17 @@ ${panelStyle}</style><div class="root"><div class="anchor" hidden>
   return {
     showStatus(settings, state) {
       anchor.hidden = !state.floating;
+      anchor.dataset.side = settings.floatingSide;
+      anchor.style.top = settings.floatingPosition + '%';
+      anchor.style.setProperty('--idle-opacity', settings.floatingOpacity);
+      const label = state.paused ? '重试翻译' : state.canRestore ? '还原网页' : '翻译网页';
+      orb.setAttribute('aria-label', label);
+      orb.title = label;
+      if (!state.floating) closePanel();
       controls.update(settings, state);
+      placePanel();
     },
-    closePanel() {
-      panel.hidden = true;
-      orb.setAttribute('aria-expanded', 'false');
-    },
+    closePanel,
     selection(rect, text) {
       tip.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - (text == null ? 115 : 358)))}px`;
       tip.style.top = `${Math.max(8, Math.min(rect.bottom + 9, innerHeight - (text == null ? 54 : 160)))}px`;

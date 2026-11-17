@@ -9,6 +9,7 @@ const ignored = 'script,style,noscript,textarea,input,select,option,pre,code,svg
 const ownedNodes = '[data-obsidian-loading],[data-obsidian-translation],[data-obsidian-source],[data-obsidian-interface]';
 const peripheral = 'nav,aside,footer,[role="navigation"],[role="complementary"],[role="banner"]';
 const primary = 'main,article,[role="main"]';
+const tocHeading = '.vector-toc-text > span:not(.vector-toc-numb), .toctext';
 let settings = defaults;
 let running = false;
 let autoSession = false;
@@ -83,7 +84,8 @@ function context(extra) {
 
 function state() {
   return { running, scope, view, note, translated, failures, paused, canRestore: running || !!rows.size,
-    floating: ready && settings.floating && siteRule() !== 'never',
+    floatingHidden: settings.hiddenFloatingSites.includes(location.hostname),
+    floating: ready && settings.floating && !settings.hiddenFloatingSites.includes(location.hostname) && siteRule() !== 'never',
     hostname: location.hostname, site: siteRule() };
 }
 
@@ -177,6 +179,11 @@ function inScope(el) {
 function qualifies(el, force = false) {
   if (!el.isConnected || el.closest(ignored) || el.closest('[role="dialog"][aria-modal="true"]')) return false;
   if (!force && !inScope(el)) return false;
+  if (el.closest('.vector-toc')) {
+    return el.matches(tocHeading + ', .ext-discussiontools-init-sidebar-meta') ||
+      (el.matches('.vector-toc-text') && !el.querySelector('span'));
+  }
+  if (el.matches('.toctext')) return true;
   if (el.matches(reading)) return !el.querySelector(reading);
   if (el.parentElement?.closest(reading) || !el.matches(block)) return false;
   if (!rows.has(el) && el.querySelector(block)) return false;
@@ -249,6 +256,9 @@ function render(el, row) {
   if (row.output.parentNode !== el) el.append(row.output);
   row.output.dataset.view = view;
   row.output.dataset.style = settings.style;
+  if (el.matches(tocHeading + ', .vector-toc-text, .ext-discussiontools-init-sidebar-meta')) {
+    row.output.dataset.layout = 'inline';
+  }
   if (view === 'bilingual' && settings.order === 'translation-first') {
     if (row.output !== el.firstChild) el.prepend(row.output);
     row.output.dataset.first = '';
@@ -544,14 +554,22 @@ async function handle(action, message = {}) {
 }
 
 async function panelAction(action, value) {
-  if (['models', 'text', 'files', 'advanced'].includes(action)) {
+  if (['models', 'floating', 'text', 'files', 'advanced'].includes(action)) {
     return request('options', { section: action });
   }
-  if (action === 'translate-page' && !settings.configured) {
+  if (['translate-page', 'toggle'].includes(action) && !settings.configured) {
     return request('options', { section: 'models' });
   }
   if (action === 'site') {
     await request('site-rule', { rule: value });
+    return sync();
+  }
+  if (action === 'toggle-floating-site') {
+    await request('floating-site', { hidden: !settings.hiddenFloatingSites.includes(location.hostname) });
+    return sync();
+  }
+  if (action === 'hide-floating-all') {
+    await request('preferences', { patch: { floating: false } });
     return sync();
   }
   if (['source', 'target', 'activeModel', 'view', 'scope', 'captions'].includes(action)) {
@@ -665,7 +683,8 @@ document.addEventListener('selectionchange', () => {
   }, 160);
 });
 document.addEventListener('pointerover', event => {
-  hoverTarget = event.target instanceof Element ? event.target.closest(reading) || event.target.closest(block) : null;
+  hoverTarget = event.target instanceof Element
+    ? event.target.closest(tocHeading) || event.target.closest(reading) || event.target.closest(block) : null;
 }, { passive: true });
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') {

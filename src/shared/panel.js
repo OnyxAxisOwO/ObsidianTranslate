@@ -35,6 +35,9 @@ export function mountPanel(host, emit) {
         ${field('site', '此网站')}${field('captions', '双语字幕')}</div>
       <div class="ot-links">${button('models', '服务商与模型', 'stack', 'ot-link')}
         ${button('text', '翻译一段文字', 'translate', 'ot-link')}
+        ${button('toggle-floating-site', '在此网站隐藏悬浮窗', 'close', 'ot-link')}
+        ${button('hide-floating-all', '在所有网站隐藏悬浮窗', 'close', 'ot-link')}
+        ${button('floating', '悬浮窗设置', 'sliders', 'ot-link')}
         ${button('files', '翻译文件', 'file', 'ot-link')}${button('advanced', '高级设置', 'settings', 'ot-link')}</div>
     </section>
   </div>`;
@@ -95,6 +98,10 @@ export function mountPanel(host, emit) {
       fields.site.disabled = !page?.hostname;
       fields.captions.value = String(settings.captions);
       const blocked = page?.site === 'never';
+      const hideSite = host.querySelector('[data-panel-action="toggle-floating-site"]');
+      hideSite.disabled = !page?.hostname;
+      hideSite.querySelector('span').textContent = page?.floatingHidden ? '在此网站显示悬浮窗' : '在此网站隐藏悬浮窗';
+      host.querySelector('[data-panel-action="hide-floating-all"]').disabled = !settings.floating;
       primary.disabled = blocked || (!page && !!settings.configured);
       original.disabled = !page?.canRestore;
       primary.querySelector('span').textContent = page?.paused ? '重试翻译' : '翻译';

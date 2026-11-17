@@ -43,7 +43,7 @@ async function act(action, value) {
   busy = true;
   error = '';
   try {
-    if (['models', 'text', 'files', 'advanced'].includes(action)) {
+    if (['models', 'floating', 'text', 'files', 'advanced'].includes(action)) {
       await api('options', { section: action });
     } else if (action === 'translate-page' && !pageSettings(settings, '').configured) {
       await api('options', { section: 'models' });
@@ -51,6 +51,12 @@ async function act(action, value) {
       page = await pageRequest('page-action', { action });
     } else if (action === 'site') {
       settings = await api('site-rule', { host: page?.hostname, rule: value });
+    } else if (action === 'toggle-floating-site') {
+      settings = await api('floating-site', { host: page?.hostname, hidden: !page?.floatingHidden });
+      page = await pageRequest('page-action', { action: 'refresh' });
+    } else if (action === 'hide-floating-all') {
+      settings = await api('preferences', { patch: { floating: false } });
+      if (page) page = await pageRequest('page-action', { action: 'refresh' });
     } else {
       settings = await api('preferences', { patch: { [action]: action === 'captions' ? value === 'true' : value } });
       if (page) page = await pageRequest('page-action', { action: 'refresh' });

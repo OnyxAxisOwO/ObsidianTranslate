@@ -29,6 +29,10 @@ export async function demoRequest(type, message = {}) {
       delete settings.sites[message.host];
       if (message.rule) settings.sites[message.host] = message.rule;
       break;
+    case 'floating-site':
+      settings.hiddenFloatingSites = settings.hiddenFloatingSites.filter(host => host !== message.host);
+      if (message.hidden) settings.hiddenFloatingSites.push(message.host);
+      break;
     case 'language-rule':
       delete settings.languageRules[message.language];
       if (message.rule) settings.languageRules[message.language] = message.rule;
@@ -69,8 +73,9 @@ export function demoBrowser() {
     runtime: {
       async sendMessage(message) {
         try {
-          const value = await demoRequest(message.type, message);
-          const writes = ['preferences', 'site-rule'].includes(message.type);
+          const scoped = ['site-rule', 'floating-site'].includes(message.type);
+          const value = await demoRequest(message.type, scoped ? { ...message, host: location.hostname } : message);
+          const writes = ['preferences', 'site-rule', 'floating-site'].includes(message.type);
           if (writes) notifyStorage?.({ settings: true }, 'local');
           return { ok: true, value: message.type === 'settings' || writes ? pageSettings(value, location.hostname) : value };
         } catch (error) {

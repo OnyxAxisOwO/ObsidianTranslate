@@ -4,10 +4,10 @@ import { activeModel, languages, modelKey, modelRevision, needsKey, normalizePro
 import { ext, reply } from './shared/webext.js';
 
 const uiProtocol = ext.runtime.getURL('/');
-const pagePrefs = ['source', 'target', 'activeModel', 'view', 'scope', 'captions'];
+const pagePrefs = ['source', 'target', 'activeModel', 'view', 'scope', 'captions', 'floating'];
 const prefs = [...pagePrefs, 'inputTarget', 'order', 'style', 'loadingStyle', 'loadingText', 'maxLength', 'batchSize',
-  'glossary', 'floating', 'selection', 'hover', 'inputSpaces', 'cache', ...Object.keys(promptDefaults)];
-const optionPages = ['models', 'reading', 'text', 'files', 'advanced', 'advanced/models', 'advanced/prompts', 'advanced/rules', 'advanced/cache'];
+  'glossary', 'floatingSide', 'floatingPosition', 'floatingOpacity', 'selection', 'hover', 'inputSpaces', 'cache', ...Object.keys(promptDefaults)];
+const optionPages = ['models', 'reading', 'floating', 'text', 'files', 'advanced', 'advanced/models', 'advanced/prompts', 'advanced/rules', 'advanced/cache'];
 let writes = Promise.resolve();
 
 async function load() {
@@ -79,6 +79,16 @@ async function handleMessage(message, sender, onResult) {
         if (message.rule) Object.defineProperty(sites, host, { value: message.rule, enumerable: true });
         return { ...current, sites };
       });
+      return ui ? edited : pageSettings(edited, hostname);
+    }
+    case 'floating-site': {
+      const host = ui ? message.host : hostname;
+      if (!/^[-\w.:[\]]{1,255}$/.test(host || '')) throw new Error('请填写有效的网站域名。');
+      const edited = await update(current => ({
+        ...current,
+        hiddenFloatingSites: [...(message.hidden ? [host] : []),
+          ...current.hiddenFloatingSites.filter(item => item !== host)],
+      }));
       return ui ? edited : pageSettings(edited, hostname);
     }
     default:
