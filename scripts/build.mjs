@@ -1,8 +1,9 @@
 import { build } from 'esbuild';
-import { mkdir, readdir, writeFile, cp } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile, cp } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 process.chdir(fileURLToPath(new URL('..', import.meta.url)));
+const { version } = JSON.parse(await readFile('package.json', 'utf8'));
 const targets = ['chrome', 'firefox', 'safari', 'demo'];
 const icons = Object.fromEntries([16, 32, 48, 128].map(size => [size, `icons/${size}.png`]));
 const entries = {
@@ -14,7 +15,7 @@ const entries = {
 const manifest = {
   manifest_version: 3,
   name: 'Obsidian Translate',
-  version: '0.1.0',
+  version,
   description: '开源双语浏览器翻译扩展，支持自定义 OpenAI 和 Anthropic API。',
   icons,
   permissions: ['storage', 'contextMenus'],
@@ -60,7 +61,7 @@ await Promise.all(targets.map(async target => {
     ...(await readdir('src/ui')).filter(name => /\.(css|html)$/.test(name) &&
       (demo || !['index.html', 'demo.css'].includes(name))).map(name => cp(`src/ui/${name}`, `${outdir}/${name}`)),
     cp('src/content/page.css', `${outdir}/page.css`),
-    ...(demo ? [] : [writeFile(`${outdir}/manifest.json`, JSON.stringify({
+    ...(demo ? [] : [cp('LICENSE', `${outdir}/LICENSE`), writeFile(`${outdir}/manifest.json`, JSON.stringify({
       ...manifest,
       background: backgrounds[target],
       ...(target === 'safari' ? { options_ui: { page: 'options.html' } } : {}),
