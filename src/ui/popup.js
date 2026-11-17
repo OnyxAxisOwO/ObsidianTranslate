@@ -6,7 +6,14 @@ import { api, tabs } from './api.js';
 const stylesheet = document.createElement('style');
 stylesheet.textContent = style;
 document.head.prepend(stylesheet);
-const panel = mountPanel(document.querySelector('#popup'), (action, value) => act(action, value));
+const container = document.querySelector('#popup');
+const panel = mountPanel(container, (action, value) => act(action, value));
+if (DEMO && parent !== window) {
+  document.body.classList.add('demo-popup');
+  new ResizeObserver(() => {
+    parent.postMessage({ type: 'obsidian-preview-size', height: container.offsetHeight }, location.origin);
+  }).observe(container);
+}
 let tab;
 let settings = defaults;
 let page = null;
