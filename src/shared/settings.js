@@ -120,7 +120,7 @@ export function activeModel(settings) {
 
 export function modelRevision(settings) {
   const active = activeModel(settings);
-  return active ? JSON.stringify([active.provider.id, active.provider.updated, active.model.id]) : '';
+  return active ? JSON.stringify([active.provider.id, active.provider.updated, active.model.id, active.model.parameters]) : '';
 }
 
 export function pageSettings({ providers, sites, ...settings }, hostname) {
@@ -159,13 +159,29 @@ function number(value, fallback, min, max, step = 1) {
   return Math.max(min, Math.min(max, Math.round(parsed / step) * step));
 }
 
+export function requestParameters(value) {
+  let parameters;
+  try {
+    parameters = typeof value === 'string' ? JSON.parse(value.trim() || '{}') : value ?? {};
+  } catch {
+    throw new Error('请求参数必须是有效的 JSON，请检查引号、逗号和括号。');
+  }
+  if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) {
+    throw new Error('请求参数必须是 JSON 对象，例如 {"reasoning_effort":"low"}。');
+  }
+  const generated = ['model', 'messages', 'input', 'system', 'instructions', 'stream'];
+  const conflict = generated.find(key => own(parameters, key));
+  if (conflict) throw new Error(`${conflict} 由扩展生成，请在这里填写其他请求参数。`);
+  return parameters;
+}
+
 export function normalizeProvider(item) {
   if (!own(protocols, item.protocol)) throw new Error('请选择有效的 API 格式。');
   if (!text(item.name, 80)) throw new Error('请填写服务商名称。');
   const models = new Map();
   for (const model of Array.isArray(item.models) ? item.models.slice(0, 500) : []) {
     const id = text(model?.id, 200);
-    if (id) models.set(id, { id, name: text(model.name, 100) || id });
+    if (id) models.set(id, { id, name: text(model.name, 100) || id, parameters: requestParameters(model.parameters) });
   }
   let baseUrl;
   try {

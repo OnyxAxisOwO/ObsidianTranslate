@@ -1,4 +1,4 @@
-import { activeModel, languages, loadingStyles, loadingTextLimit, modelKey, needsKey, promptDefaults, protocols } from '../shared/settings.js';
+import { activeModel, languages, loadingStyles, loadingTextLimit, modelKey, needsKey, promptDefaults, protocols, requestParameters } from '../shared/settings.js';
 import { icon } from '../shared/icons.js';
 import { api } from './api.js';
 import { escape, iconButton, languageOptions, option } from './helpers.js';
@@ -9,13 +9,13 @@ const navigation = document.querySelector('#navigation');
 const editor = document.querySelector('#editor');
 const toast = document.querySelector('#toast');
 const sections = {
+  models: ['服务商与模型', 'stack'],
   reading: ['网页翻译', 'globe'],
   text: ['文本翻译', 'translate'],
   files: ['文件翻译', 'file'],
   advanced: ['高级设置', 'settings'],
 };
 const advancedSections = {
-  models: ['服务商与模型', 'stack', '设置 OpenAI 等翻译服务及其模型。'],
   prompts: ['AI 提示词', 'sliders', '调整系统指令、用户输入、字幕和术语。'],
   rules: ['网站与语言', 'globe', '选择总是翻译的网站和语言。'],
   cache: ['本地缓存', 'disk', '查看或清除已存的译文。'],
@@ -188,7 +188,7 @@ function activeLabel() {
   const selection = activeModel(settings);
   return selection && !needsKey(selection.provider)
     ? `<strong class="row-value">${escape(selection.model.name)}</strong>`
-    : '<a class="button" href="#advanced/models">设置翻译模型</a>';
+    : '<a class="button" href="#models">设置翻译模型</a>';
 }
 
 function renderFiles() {
@@ -238,7 +238,7 @@ const screens = { reading: renderReading, text: renderText, files: renderFiles, 
 
 function draw() {
   const next = location.hash.slice(1).replace(/^advanced\//, '');
-  section = Object.hasOwn(screens, next) ? next : 'reading';
+  section = Object.hasOwn(screens, next) ? next : 'models';
   const advanced = Object.hasOwn(advancedSections, section);
   navigation.innerHTML = Object.entries(sections).map(([id, [name, glyph]]) =>
     `<a class="nav-item" href="#${id}"${id === section ? ' aria-current="page"' : ''}>${icon(glyph)}${name}</a>
@@ -292,6 +292,8 @@ function modelForm(index) {
   modal(existing ? '编辑模型' : '添加模型', `<form data-form="model" data-index="${existing ? index : ''}" class="editor-fields">
     <label>模型 ID<input name="id" required maxlength="200" value="${escape(existing?.id)}" placeholder="填写服务商提供的模型 ID" autofocus></label>
     <label>展示名称<input name="name" maxlength="100" value="${escape(existing?.name)}" placeholder="留空则显示模型 ID"></label>
+    <label>额外请求 JSON<textarea name="parameters" rows="7" spellcheck="false" placeholder='{"reasoning_effort":"low"}'>${escape(JSON.stringify(existing?.parameters || {}, null, 2))}</textarea></label>
+    <p class="help">填写服务商支持的额外参数，例如 <code>reasoning_effort</code>、<code>reasoning</code>、<code>thinking</code> 或 <code>temperature</code>。模型名、待译文本和流式开关由扩展生成。参数会用于网页翻译、试译和文件翻译。</p>
     <div class="dialog-actions">${existing ? button('delete-model', '删除模型', 'trash', 'danger ghost') : ''}
       ${button('close', '取消', '', 'ghost')}<button class="button primary">保存</button></div>
     <p class="form-status" role="status"></p></form>`);
@@ -527,7 +529,7 @@ document.addEventListener('submit', async event => {
         const id = data.get('id').trim();
         if (!id) throw new Error('请输入模型 ID。');
         if (models.some((model, i) => model.id === id && String(i) !== index)) throw new Error('这个模型 ID 已经存在。');
-        const model = { id, name: data.get('name').trim() || id };
+        const model = { id, name: data.get('name').trim() || id, parameters: requestParameters(data.get('parameters')) };
         if (index !== '') {
           replaceActive = { from: modelKey(provider, models[index]), to: modelKey(provider, model) };
           models[index] = model;

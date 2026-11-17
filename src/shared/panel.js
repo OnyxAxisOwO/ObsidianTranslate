@@ -23,6 +23,7 @@ export function mountPanel(host, emit) {
   host.innerHTML = `<div class="ot-panel">
     <section class="ot-main" aria-label="网页翻译">
       <header class="ot-head"><span class="ot-heading">${icon('translate')}网页翻译</span>
+        <button class="ot-model-settings" type="button" data-panel-action="models" aria-label="服务商与模型" title="服务商与模型">模型设置</button>
         <button class="ot-expand" type="button" data-panel-action="expand" aria-expanded="false" aria-label="展开高级面板" title="展开高级面板">${icon('sliders')}</button></header>
       <div class="ot-fields">${field('activeModel', '翻译模型')}${field('target', '目标语言')}</div>
       <div class="ot-actions">${button('translate-page', '翻译', 'translate', 'ot-primary')}${button('original', '还原', 'back')}</div>
@@ -32,7 +33,8 @@ export function mountPanel(host, emit) {
       <header class="ot-head"><span class="ot-heading">高级面板</span></header>
       <div class="ot-fields">${field('source', '源语言')}${field('view', '显示方式')}${field('scope', '翻译范围')}
         ${field('site', '此网站')}${field('captions', '双语字幕')}</div>
-      <div class="ot-links">${button('text', '翻译一段文字', 'translate', 'ot-link')}
+      <div class="ot-links">${button('models', '服务商与模型', 'stack', 'ot-link')}
+        ${button('text', '翻译一段文字', 'translate', 'ot-link')}
         ${button('files', '翻译文件', 'file', 'ot-link')}${button('advanced', '高级设置', 'settings', 'ot-link')}</div>
     </section>
   </div>`;

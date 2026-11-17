@@ -10,7 +10,7 @@ function endpoint(provider, route, query) {
 }
 
 export async function upstream(provider, route, data, query) {
-  if (needsKey(provider)) throw new Error('请在高级设置 → 服务商与模型中填写 API Key。');
+  if (needsKey(provider)) throw new Error('请在服务商与模型中填写 API Key。');
   const headers = { Accept: 'application/json' };
   if (provider.protocol === 'anthropic') {
     headers['anthropic-version'] = '2023-06-01';
@@ -58,15 +58,17 @@ function textParts(parts, type) {
 
 export async function generate(provider, model, system, user, maxTokens) {
   const route = protocols[provider.protocol].route;
+  const id = typeof model === 'string' ? model : model.id;
+  const parameters = typeof model === 'string' ? {} : model.parameters ?? {};
   let body;
   if (provider.protocol === 'anthropic') {
-    body = { model, system, max_tokens: maxTokens, messages: [{ role: 'user', content: user }] };
+    body = { model: id, system, max_tokens: maxTokens, messages: [{ role: 'user', content: user }] };
   } else if (provider.protocol === 'responses') {
-    body = { model, instructions: system, input: user, max_output_tokens: maxTokens };
+    body = { model: id, instructions: system, input: user, max_output_tokens: maxTokens };
   } else {
-    body = { model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] };
+    body = { model: id, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] };
   }
-  const result = await upstream(provider, route, body);
+  const result = await upstream(provider, route, { ...body, ...parameters });
   const choice = result.choices?.[0];
   if (choice?.finish_reason === 'length' || result.stop_reason === 'max_tokens' || result.status === 'incomplete') {
     throw new Error('译文超出了模型的输出上限，请调小文段长度。');

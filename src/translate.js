@@ -112,14 +112,17 @@ async function fetchBatch(provider, model, settings, target, batch, context) {
   }
 }
 
-export async function translate(settings, target, texts, selection = activeModel(settings), uncached = false, rawContext) {
+export async function translate(settings, target, texts, selection = activeModel(settings), uncached = false, rawContext, onResult) {
   if (!selection) throw new Error('请先在设置中添加服务商和翻译模型。');
   const { provider, model } = selection;
   const useCache = settings.cache && !uncached;
   const epoch = cacheEpoch;
   const size = settings.maxLength;
   const context = translationContext(rawContext);
-  const signature = await hash([2, provider.id, provider.baseUrl, provider.protocol, provider.updated, model.id, target, promptSignature(settings, context)]);
+  const signatureParts = [2, provider.id, provider.baseUrl, provider.protocol, provider.updated, model.id,
+    target, promptSignature(settings, context)];
+  if (Object.keys(model.parameters || {}).length) signatureParts.push(model.parameters);
+  const signature = await hash(signatureParts);
   const lists = await Promise.all(texts.map(async text => Promise.all(splitText(text, size).map(async part => ({
     key: await hash([signature, part.trim()]),
     text: part.trim(),
@@ -143,28 +146,34 @@ export async function translate(settings, target, texts, selection = activeModel
     }
     results.set(key, promise);
   }
+  const delivered = Promise.all(lists.map(async (list, index) => {
+    const parts = await Promise.all(list.map(({ key, text }) => text ? results.get(key) : { value: '' }));
+    const failure = parts.find(part => part.status === 'rejected');
+    const result = failure ? { error: failure.reason.message } : {
+      text: parts.map((part, i) => part.value + (i < parts.length - 1 ? list[i].separator : '')).join('').trim(),
+      cached: list.every(item => !item.text || hits.has(item.key)),
+    };
+    onResult?.(index, result);
+    return result;
+  }));
   const work = group(fresh, settings.batchSize, size).map(async batch => {
-    const outputs = await fetchBatch(provider, model.id, settings, target, batch, context);
+    const outputs = await fetchBatch(provider, model, settings, target, batch, context);
     const saved = [];
     batch.forEach(({ key }, i) => {
       if (outputs[i].status === 'fulfilled') saved.push([key, outputs[i].value]);
     });
+    batch.forEach(({ resolve }, i) => {
+      resolve(outputs[i]);
+    });
     if (useCache && saved.length && epoch === cacheEpoch) {
       await cache.write(saved, () => epoch === cacheEpoch).catch(() => {});
     }
-    batch.forEach(({ pendingKey, resolve }, i) => {
-      if (!uncached) pending.delete(pendingKey);
-      resolve(outputs[i]);
-    });
+    if (!uncached) {
+      for (const { pendingKey } of batch) pending.delete(pendingKey);
+    }
   });
   await Promise.all(work);
-  return Promise.all(lists.map(async list => {
-    const parts = await Promise.all(list.map(({ key, text }) => text ? results.get(key) : { value: '' }));
-    const failure = parts.find(part => part.status === 'rejected');
-    if (failure) return { error: failure.reason.message };
-    return { text: parts.map((part, i) => part.value + (i < parts.length - 1 ? list[i].separator : '')).join('').trim(),
-      cached: list.every(item => !item.text || hits.has(item.key)) };
-  }));
+  return delivered;
 }
 
 export function clearCache() {

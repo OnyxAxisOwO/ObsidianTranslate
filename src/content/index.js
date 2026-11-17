@@ -1,5 +1,5 @@
 import { defaults, languageCode, own, promptDefaults } from '../shared/settings.js';
-import { ext, reply, request } from '../shared/webext.js';
+import { ext, reply, request, requestParagraphs } from '../shared/webext.js';
 import { connectCaptions } from './captions.js';
 import { overlay } from './overlay.js';
 
@@ -28,6 +28,9 @@ let hoverTarget;
 let ready = false;
 let mutationTimer;
 let pumpTimer;
+let nextDispatch = 0;
+let firstBatch = true;
+let translationRun = new AbortController();
 let selectionTimer;
 const rows = new Map();
 const queue = new Set();
@@ -304,6 +307,11 @@ function scan(root) {
 
 function reset() {
   generation++;
+  translationRun.abort();
+  translationRun = new AbortController();
+  held = 0;
+  nextDispatch = 0;
+  firstBatch = true;
   clearTimeout(pumpTimer);
   near.disconnect();
   for (const [el, row] of rows) erase(el, row);
@@ -324,7 +332,7 @@ function start(nextScope, automatic = false) {
   scope = nextScope;
   hasPrimary = !!document.querySelector(primary);
   scan(document.body);
-  schedulePump(55);
+  schedulePump(0);
   status();
 }
 
@@ -336,12 +344,16 @@ function stop() {
 }
 
 function pumpCapacity() {
-  return Math.max(2, Math.ceil(settings.requestsPerSecond ?? 2));
+  // Keep requests moving for the duration of the API timeout, independently of response latency.
+  return Math.max(2, Math.ceil((settings.requestsPerSecond ?? 2) * 25));
 }
 
 function schedulePump(delay = 110) {
   clearTimeout(pumpTimer);
-  if (!paused && (running || urgent.size) && queue.size && held < pumpCapacity()) pumpTimer = setTimeout(pump, delay);
+  if (!paused && (running || urgent.size) && queue.size && held < pumpCapacity()) {
+    const wait = Math.max(delay, nextDispatch - performance.now());
+    pumpTimer = setTimeout(pump, Math.min(0x7fff_ffff, Math.max(0, wait)));
+  }
 }
 
 function pauseAfterError(message) {
@@ -355,16 +367,20 @@ async function pump() {
   if (paused || held >= pumpCapacity() || (!running && !urgent.size)) return;
   const chunk = [];
   let length = 0;
-  for (const el of [...new Set([...urgent, ...(running ? queue : [])])]) {
+  const visible = urgent.size > 0;
+  const candidates = visible ? urgent : queue;
+  for (const el of candidates) {
     const row = rows.get(el);
     if (row && el.isConnected) {
-      if (chunk.length && (chunk.length >= settings.batchSize || length + row.original.length > settings.maxLength)) break;
+      if (chunk.length && (firstBatch || chunk.length >= settings.batchSize || length + row.original.length > settings.maxLength)) break;
       chunk.push([el, row]);
       length += row.original.length;
     }
     urgentlyRemove(el);
   }
   if (!chunk.length) return;
+  firstBatch = false;
+  nextDispatch = performance.now() + 1000 / (settings.requestsPerSecond ?? 2);
   const version = generation;
   held++;
   for (const [el, row] of chunk) {
@@ -373,40 +389,49 @@ async function pump() {
   }
   status();
   schedulePump(0);
+  const completed = new Set();
+  let allCached = true;
   try {
-    const results = await request('translate', { texts: chunk.map(([, row]) => row.original),
-      target: settings.target, revision: settings.revision, context: context() });
-    if (version !== generation) return;
-    let firstError = '';
-    results.forEach((result, i) => {
+    await requestParagraphs({ texts: chunk.map(([, row]) => row.original),
+      target: settings.target, revision: settings.revision, context: context() }, (i, result) => {
+      if (version !== generation || completed.has(i)) return;
+      completed.add(i);
+      allCached &&= result.cached === true;
       const [el, row] = chunk[i];
+      row.pending = false;
+      clearLoading(row);
       if (!el.isConnected || rows.get(el) !== row) return;
       if (result.error) {
         rows.delete(el);
         failures++;
-        firstError ||= result.error;
+        pauseAfterError(result.error);
       } else {
         row.text = result.text;
         translated++;
         render(el, row);
       }
-    });
-    if (firstError) pauseAfterError(firstError);
+      if (!paused) status();
+    }, translationRun.signal);
   } catch (error) {
     if (version !== generation) return;
-    for (const [el, row] of chunk) {
-      if (rows.get(el) === row) rows.delete(el);
+    for (const [i, [el, row]] of chunk.entries()) {
+      if (!completed.has(i) && rows.get(el) === row) {
+        rows.delete(el);
+        failures++;
+      }
     }
-    failures += chunk.length;
     pauseAfterError(error.message);
   } finally {
     for (const [, row] of chunk) {
       row.pending = false;
       clearLoading(row);
     }
-    held--;
-    if (!paused) status();
-    schedulePump(0);
+    if (version === generation) {
+      held--;
+      if (allCached && completed.size === chunk.length) nextDispatch = 0;
+      if (!paused) status();
+      schedulePump(0);
+    }
   }
 }
 
@@ -519,11 +544,11 @@ async function handle(action, message = {}) {
 }
 
 async function panelAction(action, value) {
-  if (['text', 'files', 'advanced'].includes(action)) {
+  if (['models', 'text', 'files', 'advanced'].includes(action)) {
     return request('options', { section: action });
   }
   if (action === 'translate-page' && !settings.configured) {
-    return request('options', { section: 'advanced/models' });
+    return request('options', { section: 'models' });
   }
   if (action === 'site') {
     await request('site-rule', { rule: value });
@@ -560,7 +585,10 @@ async function sync(navigated = false) {
   if (previous.loadingStyle !== settings.loadingStyle || previous.loadingText !== settings.loadingText) {
     for (const [el, row] of rows) updateLoading(el, row);
   }
-  if (previous.requestsPerSecond !== settings.requestsPerSecond) schedulePump(0);
+  if (previous.requestsPerSecond !== settings.requestsPerSecond) {
+    nextDispatch = 0;
+    schedulePump(0);
+  }
   if (restart) captions(false);
   captions(!!settings.configured && settings.captions && siteRule() !== 'never');
   if (siteRule() === 'never' || !settings.configured || (autoSession && autoRule() === 'never')) {

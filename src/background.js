@@ -7,7 +7,7 @@ const uiProtocol = ext.runtime.getURL('/');
 const pagePrefs = ['source', 'target', 'activeModel', 'view', 'scope', 'captions'];
 const prefs = [...pagePrefs, 'inputTarget', 'order', 'style', 'loadingStyle', 'loadingText', 'maxLength', 'batchSize',
   'glossary', 'floating', 'selection', 'hover', 'inputSpaces', 'cache', ...Object.keys(promptDefaults)];
-const optionPages = ['reading', 'text', 'files', 'advanced', 'advanced/models', 'advanced/prompts', 'advanced/rules', 'advanced/cache'];
+const optionPages = ['models', 'reading', 'text', 'files', 'advanced', 'advanced/models', 'advanced/prompts', 'advanced/rules', 'advanced/cache'];
 let writes = Promise.resolve();
 
 async function load() {
@@ -36,7 +36,7 @@ function draftProvider(item, settings) {
   });
 }
 
-ext.runtime.onMessage.addListener(reply(async (message, sender) => {
+async function handleMessage(message, sender, onResult) {
   const page = sender.url?.startsWith(uiProtocol) ? null : sender.tab?.url || sender.url;
   const ui = sender.url?.startsWith(uiProtocol);
   const settings = await load();
@@ -56,7 +56,7 @@ ext.runtime.onMessage.addListener(reply(async (message, sender) => {
       if (message.revision != null && message.revision !== modelRevision(settings)) {
         throw new Error('翻译模型已更新，请重试。');
       }
-      return translate(settings, target, texts, undefined, false, message.context);
+      return translate(settings, target, texts, undefined, false, message.context, onResult);
     }
     case 'options':
       return optionPages.includes(message.section)
@@ -120,7 +120,7 @@ ext.runtime.onMessage.addListener(reply(async (message, sender) => {
     case 'test': {
       const provider = draftProvider(message.provider, settings);
       const [result] = await translate(settings, 'zh-CN', ['Good morning.'],
-        { provider, model: { id: message.model } }, true);
+        { provider, model: provider.models.find(model => model.id === message.model) || { id: message.model } }, true);
       if (result.error) throw new Error(result.error);
       return result.text;
     }
@@ -128,7 +128,31 @@ ext.runtime.onMessage.addListener(reply(async (message, sender) => {
     case 'cache-clear': return clearCache();
     default: throw new Error('无法识别的扩展操作。');
   }
-}));
+}
+
+ext.runtime.onMessage.addListener(reply(handleMessage));
+ext.runtime.onConnect.addListener(port => {
+  if (port.name !== 'translate-paragraphs') return;
+  let connected = true;
+  port.onDisconnect.addListener(() => { connected = false; });
+  const send = message => {
+    if (!connected) return;
+    try {
+      port.postMessage(message);
+    } catch {
+      connected = false;
+    }
+  };
+  const receive = message => {
+    port.onMessage.removeListener(receive);
+    handleMessage({ ...message, type: 'translate' }, port.sender,
+      (index, result) => send({ index, result })).then(
+      () => send({ done: true }),
+      error => send({ error: error.message }),
+    );
+  };
+  port.onMessage.addListener(receive);
+});
 
 function activate(tab, action, details = {}) {
   if (tab?.id != null) {

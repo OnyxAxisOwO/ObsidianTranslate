@@ -43,10 +43,10 @@ async function act(action, value) {
   busy = true;
   error = '';
   try {
-    if (['text', 'files', 'advanced'].includes(action)) {
+    if (['models', 'text', 'files', 'advanced'].includes(action)) {
       await api('options', { section: action });
     } else if (action === 'translate-page' && !pageSettings(settings, '').configured) {
-      await api('options', { section: 'advanced/models' });
+      await api('options', { section: 'models' });
     } else if (['translate-page', 'original'].includes(action)) {
       page = await pageRequest('page-action', { action });
     } else if (action === 'site') {
