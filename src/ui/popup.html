@@ -4,32 +4,24 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>Obsidian Translate</title>
-  <link rel="icon" href="icons/32.png"><link rel="stylesheet" href="ui.css">
+  <link rel="icon" href="icons/32.png">
+  <style>
+    body { margin: 0; padding: 0; background: #fff; width: max-content; }
+    .ot-panel .ot-main, .ot-panel .ot-details { box-shadow: none; }
+    .ot-panel { align-items: stretch; gap: 0; flex-direction: row; }
+    .ot-panel .ot-details { flex: none; max-width: none; width: 224px; max-height: none; }
+    .ot-panel .ot-main { max-width: none; }
+    body:has(.ot-expanded) { width: 500px; }
+    @media (pointer: coarse) {
+      body:has(.ot-expanded) { width: 276px; }
+      .ot-panel { flex-direction: column; }
+      .ot-panel .ot-details { width: 276px; }
+    }
+    @media (prefers-color-scheme: dark) { body { background: #242428; } }
+  </style>
 </head>
-<body class="popup-body">
-  <main class="popup" id="popup">
-    <header class="popup-head">
-      <div class="brand"><img src="icons/48.png" alt=""><span>Obsidian<span> Translate</span></span></div>
-      <button class="icon-button" type="button" data-action="options" id="open-options" aria-label="打开设置" title="打开设置"></button>
-    </header>
-    <div class="page-context"><span class="page-context-mark" id="globe"></span><div><strong id="hostname">当前网页</strong><div id="page-status" role="status">正在加载…</div></div></div>
-    <div class="popup-fields">
-      <label for="target">目标语言</label><select id="target"></select>
-      <label for="model">翻译模型</label><select id="model"></select>
-    </div>
-    <div class="display-group" aria-label="显示方式">
-      <button type="button" data-action="translation">仅译文</button>
-      <button type="button" data-action="bilingual">双语对照</button>
-      <button type="button" data-action="original">原文</button>
-    </div>
-    <button class="button primary popup-translate" type="button" data-action="toggle" disabled>翻译网页</button>
-    <footer class="popup-footer">
-      <button class="button ghost" data-action="whole" type="button" disabled>翻译整页</button>
-      <select id="site-rule" aria-label="此站的翻译规则" disabled>
-        <option value="">此站 · 手动</option><option value="always">此站 · 总是翻译</option><option value="never">此站 · 永不翻译</option>
-      </select>
-    </footer>
-  </main>
+<body>
+  <main id="popup"></main>
   <script src="popup.js" defer></script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 import { cache } from './cache.js';
 import { activeModel } from './shared/settings.js';
+import { promptSignature, translationContext } from './shared/prompts.js';
 import { translateBatch, upstream } from './shared/upstream.js';
 
 const queues = new Map();
@@ -92,8 +93,8 @@ function group(items, count, size) {
   return batches;
 }
 
-async function fetchBatch(provider, model, settings, target, batch) {
-  const run = texts => schedule(provider, () => translateBatch(provider, model, settings, target, texts));
+async function fetchBatch(provider, model, settings, target, batch, context) {
+  const run = texts => schedule(provider, () => translateBatch(provider, model, settings, target, texts, context));
   try {
     const outputs = await run(batch.map(item => item.text));
     return outputs.map(value => ({ status: 'fulfilled', value }));
@@ -103,13 +104,14 @@ async function fetchBatch(provider, model, settings, target, batch) {
   }
 }
 
-export async function translate(settings, target, texts, selection = activeModel(settings), uncached = false) {
+export async function translate(settings, target, texts, selection = activeModel(settings), uncached = false, rawContext) {
   if (!selection) throw new Error('请先在设置中添加服务商和翻译模型。');
   const { provider, model } = selection;
   const useCache = settings.cache && !uncached;
   const epoch = cacheEpoch;
   const size = settings.maxLength;
-  const signature = await hash([1, provider.id, provider.baseUrl, provider.protocol, provider.updated, model.id, target, settings.prompt]);
+  const context = translationContext(rawContext);
+  const signature = await hash([2, provider.id, provider.baseUrl, provider.protocol, provider.updated, model.id, target, promptSignature(settings, context)]);
   const lists = await Promise.all(texts.map(async text => Promise.all(splitText(text, size).map(async part => ({
     key: await hash([signature, part.trim()]),
     text: part.trim(),
@@ -134,7 +136,7 @@ export async function translate(settings, target, texts, selection = activeModel
     results.set(key, promise);
   }
   const work = group(fresh, settings.batchSize, size).map(async batch => {
-    const outputs = await fetchBatch(provider, model.id, settings, target, batch);
+    const outputs = await fetchBatch(provider, model.id, settings, target, batch, context);
     const saved = [];
     batch.forEach(({ key }, i) => {
       if (outputs[i].status === 'fulfilled') saved.push([key, outputs[i].value]);

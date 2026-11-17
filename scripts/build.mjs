@@ -50,6 +50,7 @@ await Promise.all(targets.map(async target => {
     build({
       entryPoints,
       bundle: true,
+      loader: { '.css': 'text' },
       minify: !demo,
       target: ['chrome120', 'firefox121', 'safari17.4'],
       outdir,

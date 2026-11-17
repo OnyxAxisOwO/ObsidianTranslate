@@ -1,4 +1,4 @@
-import { activeModel, defaults, modelKey, protocols } from '../shared/settings.js';
+import { activeModel, languages, modelKey, needsKey, promptDefaults, protocols } from '../shared/settings.js';
 import { icon } from '../shared/icons.js';
 import { api } from './api.js';
 import { escape, iconButton, languageOptions, option } from './helpers.js';
@@ -9,11 +9,16 @@ const navigation = document.querySelector('#navigation');
 const editor = document.querySelector('#editor');
 const toast = document.querySelector('#toast');
 const sections = {
-  models: ['服务商与模型', 'stack'],
   reading: ['网页翻译', 'globe'],
-  rules: ['网站规则', 'sliders'],
+  text: ['文本翻译', 'translate'],
   files: ['文件翻译', 'file'],
-  cache: ['本地缓存', 'disk'],
+  advanced: ['高级设置', 'settings'],
+};
+const advancedSections = {
+  models: ['服务商与模型', 'stack', '设置 OpenAI 等翻译服务及其模型。'],
+  prompts: ['AI 提示词', 'sliders', '调整系统指令、用户输入、字幕和术语。'],
+  rules: ['网站与语言', 'globe', '选择总是翻译的网站和语言。'],
+  cache: ['本地缓存', 'disk', '查看或清除已存的译文。'],
 };
 
 let settings;
@@ -61,7 +66,7 @@ function renderModels() {
     </div>
     <div class="provider-detail">
       <div class="detail-head"><div class="detail-title">${mark(provider)}<div><h2 class="shorten">${escape(provider.name)}</h2>
-        <p>${protocols[provider.protocol].name}</p></div></div>${button('edit-provider', '编辑连接', 'sliders')}</div>
+        <p>${protocols[provider.protocol].name}</p></div></div>${button('edit-provider', needsKey(provider) ? '填写 API Key' : '编辑连接', 'sliders')}</div>
       <dl class="connection">
         <div><dt>Base URL</dt><dd class="mono" title="${escape(provider.baseUrl)}">${escape(provider.baseUrl)}</dd></div>
         <div><dt>请求速率</dt><dd>${provider.rps} 次 / 秒</dd></div>
@@ -92,74 +97,154 @@ function select(key, title, description, choices) {
   return row(title, description, `<select data-pref="${key}" aria-label="${title}">${choices}</select>`);
 }
 
+function group(title, contents) {
+  return `<section class="preference-group">${title ? `<h2>${title}</h2>` : ''}<div class="settings-group">${contents}</div></section>`;
+}
+
+function showOptions(key, ...items) {
+  return items.map(([value, label]) => option(value, label, settings[key])).join('');
+}
+
 function renderReading() {
-  return heading('网页翻译', '调整阅读方式、鼠标操作和发给模型的提示词。') + `<div class="preferences">
-    <section class="preference-group"><h2>阅读方式</h2>
+  return heading('网页翻译', '选择打开网页时的翻译方式。') + `<div class="preferences">
+    ${group('阅读', `
       ${select('target', '目标语言', '', languageOptions(settings.target))}
-      ${select('view', '显示方式', '', option('translation', '仅译文', settings.view) + option('bilingual', '双语对照', settings.view))}
-      ${select('scope', '翻译范围', '正文模式会优先识别文章和页面主区。',
-        option('reading', '正文', settings.scope) + option('whole', '整页', settings.scope))}
-      ${select('inputTarget', '输入框目标语言', '在输入框内按 Option / Alt + Shift + I 翻译。',
-        languageOptions(settings.inputTarget))}
-    </section>
-    <section class="preference-group"><h2>网页工具</h2>
-      ${toggle('floating', '悬浮窗', '在网页右下角打开翻译菜单。')}
+      ${select('source', '源语言', '', option('auto', '自动识别', settings.source) + languageOptions(settings.source))}
+      ${select('view', '显示方式', '', showOptions('view', ['translation', '仅译文'], ['bilingual', '双语对照']))}
+      ${select('order', '双语顺序', '', showOptions('order', ['original-first', '原文在前'], ['translation-first', '译文在前']))}
+      ${select('style', '双语译文样式', '', showOptions('style', ['plain', '与正文相同'], ['soft', '淡化'], ['accent', '淡色底纹']))}
+      ${select('scope', '翻译范围', '正文优先翻译文章和页面主区。', showOptions('scope', ['reading', '正文'], ['whole', '整页']))}
+    `)}
+    ${group('网页工具', `
+      ${toggle('floating', '网页悬浮窗', '在网页右下角打开翻译菜单。')}
       ${toggle('selection', '划词翻译', '选中文字后显示翻译按钮。')}
       ${toggle('hover', '悬停翻译', '鼠标指向文段时按 Shift 翻译。')}
-      ${toggle('captions', '双语视频字幕', '支持 YouTube 和使用标准 HTML 字幕轨的播放器。请先打开播放器字幕。')}
-    </section>
-    <form class="preference-group prompt" data-form="translation">
-      <h2>文段与提示词</h2>
-      <div class="prompt-fields">
-        <label class="editor-fields">每次请求最多文段<input name="batchSize" type="number" min="1" max="20" required value="${settings.batchSize}"></label>
-        <label class="editor-fields">每次请求最大字符数<input name="maxLength" type="number" min="300" max="12000" required value="${settings.maxLength}"></label>
-      </div>
-      <label class="editor-fields">默认翻译提示词<textarea name="prompt" rows="4" maxlength="6000" required>${escape(settings.prompt)}</textarea></label>
-      <p class="help"><code>{{language}}</code> 会替换为目标语言名称。过长的文段会按句子或空格拆分。</p>
-      <div class="actions">${button('reset-prompt', '恢复默认提示词', '', 'ghost')}<button class="button primary">保存</button></div>
-    </form>
+      ${toggle('captions', '双语字幕', '在 YouTube 和兼容播放器打开原字幕后显示译文。')}
+    `)}
+    ${group('输入框', `
+      ${select('inputTarget', '输入框目标语言', '在输入框中按 Option / Alt + Shift + I 翻译。', languageOptions(settings.inputTarget))}
+      ${toggle('inputSpaces', '连按三次空格翻译', '也可以输入 /ja 或 /en 指定目标语言，或用 // 标记只翻译其后的文字。')}
+    `)}
   </div>`;
 }
 
+function promptField(key, title, description, size = 3, limit = 6000) {
+  return `<label class="prompt-field"><strong>${title}</strong><small>${description}</small>
+    <textarea name="${key}" rows="${size}" maxlength="${limit}">${escape(settings[key])}</textarea></label>`;
+}
+
+function renderPrompts() {
+  return heading('AI 提示词', '设定模型收到的指令，以及单段、多段和字幕各自的输入格式。') + `<form class="preferences" data-form="prompts">
+    ${group('翻译指令', `
+      ${promptField('systemPrompt', '系统提示词', '定义模型的角色，在所有翻译请求中使用。')}
+      ${promptField('translationPrompt', '翻译提示词', '补充语气、用词和翻译要求，随系统提示词一起发送。')}
+      ${promptField('userPrompt', '用户提示词', '单段翻译时发送给模型的内容。使用 {{text}} 插入原文。')}
+    `)}
+    ${group('批量翻译与字幕', `
+      ${promptField('batchSystemPrompt', '多段落系统提示词', '一次请求包含多个文段时补充给模型的指令。', 2)}
+      ${promptField('batchUserPrompt', '多段落用户提示词', '使用 {{text}} 插入原文数组。', 2)}
+      ${promptField('subtitlePrompt', '字幕提示词', '视频和字幕文件翻译使用这段用户提示词。', 3)}
+    `)}
+    ${group('术语', promptField('glossary', '术语对照', '每行填写一组，写成「原词 → 译法」。', 3, 4000))}
+    ${group('每次请求', `
+      ${row('最多文段数', '控制一次发送多少段。', `<input aria-label="最多文段数" name="batchSize" type="number" min="1" max="20" required value="${settings.batchSize}">`)}
+      ${row('最多字符数', '超长文段会按句子或空格拆分。', `<input aria-label="最多字符数" name="maxLength" type="number" min="300" max="12000" required value="${settings.maxLength}">`)}
+    `)}
+    <p class="help">可用变量包括 <code>{{from}}</code>、<code>{{to}}</code>、<code>{{title}}</code> 和 <code>{{content_type}}</code>。用户提示词中的 <code>{{text}}</code> 会替换为待翻译内容。</p>
+    <div class="actions end">${button('reset-prompt', '恢复默认', '', 'ghost')}<button class="button primary">保存提示词</button></div>
+  </form>`;
+}
+
 function renderRules() {
-  const entries = Object.entries(settings.sites);
-  return heading('网站规则', '为指定网站开启自动翻译，或停用翻译工具。', button('new-site', '添加规则', 'plus', 'primary')) +
-    `<div class="preferences">${entries.length ? entries.map(([host, rule], index) => row(escape(host),
-      rule === 'always' ? '总是翻译' : '永不翻译', iconButton('delete-site', '移除站点规则', 'trash', index))).join('')
-      : '<div class="empty">还没有网站规则。也可以在工具栏弹窗中设置当前网站。</div>'}</div>`;
+  const sites = Object.entries(settings.sites);
+  const languagesWithRules = Object.entries(settings.languageRules);
+  return heading('网站与语言', '设定哪些网站或语言会自动翻译。网站规则优先。') + `<div class="preferences">
+    ${group('网站', `
+      ${sites.map(([host, rule], index) => row(escape(host), rule === 'always' ? '总是翻译' : '停用翻译',
+        iconButton('delete-site', '移除网站规则', 'trash', index))).join('')}
+      ${row('网站规则', sites.length ? '' : '你也可以在网页悬浮窗中设置当前网站。', button('new-site', '添加网站', 'plus'))}
+    `)}
+    ${group('语言', `
+      ${languagesWithRules.map(([language, rule], index) => row(languages[language][0],
+        rule === 'always' ? '总是自动翻译' : '仅手动翻译', iconButton('delete-language', '移除语言规则', 'trash', index))).join('')}
+      ${row('语言规则', '根据网页源语言决定是否自动翻译。', button('new-language', '添加语言', 'plus'))}
+    `)}
+  </div>`;
 }
 
 function renderCache() {
-  return heading('本地缓存', '同一模型、目标语言和提示词下的重复文段会复用已保存译文。') +
-    `<div class="preferences"><section class="preference-group">
-      ${toggle('cache', '保存译文', '译文保存在当前浏览器，每个浏览器最多保留 3,500 个文段。')}
-      ${row('已缓存文段', '<span id="cache-count">正在读取…</span>', button('clear-cache', '清除缓存', 'trash', 'danger'))}
-    </section></div>`;
+  return heading('本地缓存', '再次遇到相同的内容时，可以直接使用以前的译文。') +
+    `<div class="preferences">${group('已保存的译文', `
+      ${toggle('cache', '复用译文', '译文保存在这台设备的浏览器中。')}
+      ${row('缓存内容', '<span id="cache-count">正在读取…</span>', button('clear-cache', '清除缓存', 'trash', 'danger'))}
+    `)}</div>`;
+}
+
+function activeLabel() {
+  const selection = activeModel(settings);
+  return selection && !needsKey(selection.provider)
+    ? `<strong class="row-value">${escape(selection.model.name)}</strong>`
+    : '<a class="button" href="#advanced/models">设置翻译模型</a>';
 }
 
 function renderFiles() {
   const selection = activeModel(settings);
-  return heading('文件翻译', '翻译 TXT、Markdown、SRT 或 WebVTT，字幕保留编号与时间轴。') +
+  return heading('文件翻译', '添加文件，下载译文或双语版本。') +
     `<form class="preferences" data-form="file">
-      ${row('原始文件', 'UTF-8，最大 1 MB', '<input name="file" type="file" aria-label="原始文件" accept=".txt,.md,.srt,.vtt" required>')}
-      ${row('翻译模型', escape(selection?.model.name || '请先添加翻译模型'), '')}
-      ${select('fileTarget', '目标语言', '', languageOptions(settings.target))}
-      ${row('保留原文', '把译文附加到每一段或字幕条目。', `<input type="checkbox" role="switch" class="switch" name="bilingual" aria-label="保留原文"${settings.view === 'bilingual' ? ' checked' : ''}>`)}
-      <div class="actions"><button class="button primary" ${selection ? '' : 'disabled'}>${icon('translate')} 翻译文件</button>
-        <button type="button" class="button ghost" data-action="stop-file" hidden>停止</button></div>
+      <label class="file-picker"><input name="file" type="file" aria-label="选择文件" accept=".txt,.md,.srt,.vtt" required>
+        <span class="file-icon">${icon('file')}</span><strong id="file-name">选择或拖入文件</strong>
+        <small>TXT、Markdown、SRT 和 WebVTT · 最大 1 MB</small>
+      </label>
+      ${group('翻译选项', `
+        ${row('翻译模型', '', activeLabel())}
+        ${select('fileTarget', '目标语言', '', languageOptions(settings.target))}
+        ${row('输出内容', '', `<select aria-label="输出内容" name="output">${showOptions('view', ['translation', '仅译文'], ['bilingual', '双语对照'])}</select>`)}
+      `)}
+      <div class="actions end"><button type="button" class="button ghost" data-action="stop-file" hidden>停止</button>
+        <button class="button primary" ${selection && !needsKey(selection.provider) ? '' : 'disabled'}>${icon('translate')} 翻译文件</button></div>
       <div class="file-result"><p class="form-status" role="status"></p><a class="button" id="download" hidden>下载译文</a></div>
     </form>`;
 }
 
-const screens = { models: renderModels, reading: renderReading, rules: renderRules, files: renderFiles, cache: renderCache };
+function renderText() {
+  return heading('文本翻译', '粘贴一段文字，翻译后直接复制。') + `<form class="preferences text-workspace" data-form="text">
+    <div class="text-panes">
+      <label><span>原文</span><textarea name="text" rows="8" maxlength="30000" required placeholder="在此输入或粘贴"></textarea></label>
+      <label><span>译文</span><textarea name="result" rows="8" readonly placeholder="译文会显示在这里"></textarea></label>
+    </div>
+    ${group('', `
+      ${row('翻译模型', '', activeLabel())}
+      ${row('源语言', '', `<select name="source" aria-label="源语言">${option('auto', '自动识别', settings.source) + languageOptions(settings.source)}</select>`)}
+      ${row('目标语言', '', `<select name="target" aria-label="目标语言">${languageOptions(settings.target)}</select>`)}
+    `)}
+    <div class="actions end">${button('copy-text', '复制译文', 'copy', 'ghost')}<button class="button primary">${icon('translate')} 翻译</button></div>
+    <p class="form-status" role="status"></p>
+  </form>`;
+}
+
+function renderAdvanced() {
+  return heading('高级设置', '管理翻译服务、AI 提示词、规则和本地数据。') + `<div class="preferences">
+    ${group('', Object.entries(advancedSections).map(([id, [name, glyph, description]]) =>
+      `<a class="settings-link" href="#advanced/${id}"><span class="settings-link-icon">${icon(glyph)}</span>
+        <span><strong>${name}</strong><small>${description}</small></span>${icon('right')}</a>`).join(''))}</div>`;
+}
+
+const screens = { reading: renderReading, text: renderText, files: renderFiles, advanced: renderAdvanced,
+  models: renderModels, prompts: renderPrompts, rules: renderRules, cache: renderCache };
+
 function draw() {
-  const next = location.hash.slice(1);
-  section = Object.hasOwn(sections, next) ? next : 'models';
+  const next = location.hash.slice(1).replace(/^advanced\//, '');
+  section = Object.hasOwn(screens, next) ? next : 'reading';
+  const advanced = Object.hasOwn(advancedSections, section);
   navigation.innerHTML = Object.entries(sections).map(([id, [name, glyph]]) =>
-    `<a class="nav-item" href="#${id}"${id === section ? ' aria-current="page"' : ''}>${icon(glyph)}${name}</a>`).join('');
-  container.innerHTML = `<div class="screen">${screens[section]()}</div>`;
+    `<a class="nav-item" href="#${id}"${id === section ? ' aria-current="page"' : ''}>${icon(glyph)}${name}</a>
+    ${id === 'advanced' && advanced ? `<div class="subnav">${Object.entries(advancedSections).map(([key, [label]]) =>
+      `<a class="nav-item" href="#advanced/${key}"${key === section ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</div>` : ''}`).join('');
+  container.innerHTML = `<div class="screen">${advanced ? `<a class="settings-back" href="#advanced">${icon('back')} 高级设置</a>` : ''}
+    ${screens[section]()}</div>`;
   container.setAttribute('aria-busy', 'false');
   if (section === 'cache') countCache();
+  if (section === 'files') wireFilePicker();
 }
 
 async function countCache() {
@@ -208,12 +293,39 @@ function modelForm(index) {
     <p class="form-status" role="status"></p></form>`);
 }
 
-function siteForm() {
-  modal('添加站点规则', `<form data-form="site" class="editor-fields">
-    <label>域名或完整网址<input name="host" placeholder="example.com" required autofocus></label>
-    <label>翻译规则<select name="rule"><option value="always">总是翻译</option><option value="never">永不翻译</option></select></label>
+function siteForm(language = false) {
+  modal(language ? '添加语言规则' : '添加网站规则', `<form data-form="${language ? 'language' : 'site'}" class="editor-fields">
+    ${language
+      ? `<label>源语言<select name="language">${languageOptions('en')}</select></label>`
+      : '<label>域名或完整网址<input name="host" placeholder="example.com" required autofocus></label>'}
+    <label>翻译规则<select name="rule"><option value="always">总是翻译</option>
+      <option value="never">${language ? '仅手动翻译' : '停用翻译'}</option></select></label>
     <div class="dialog-actions">${button('close', '取消', '', 'ghost')}<button class="button primary">保存</button></div>
     <p class="form-status" role="status"></p></form>`);
+}
+
+function wireFilePicker() {
+  const picker = container.querySelector('.file-picker');
+  const input = picker.querySelector('input');
+  const name = picker.querySelector('#file-name');
+  input.addEventListener('change', () => { name.textContent = input.files[0]?.name || '选择或拖入文件'; });
+  picker.addEventListener('dragover', event => {
+    if (!event.dataTransfer.types.includes('Files')) return;
+    event.preventDefault();
+    picker.classList.add('dragover');
+  });
+  picker.addEventListener('dragleave', () => picker.classList.remove('dragover'));
+  picker.addEventListener('drop', event => {
+    event.preventDefault();
+    picker.classList.remove('dragover');
+    if (!event.dataTransfer.files.length) return;
+    if (event.dataTransfer.files.length !== 1) {
+      notify('请一次选择一个文件。');
+      return;
+    }
+    input.files = event.dataTransfer.files;
+    input.dispatchEvent(new Event('change'));
+  });
 }
 
 function formStatus(form, text, error = false) {
@@ -270,6 +382,10 @@ async function action(name, index, control) {
     case 'edit-model': return modelForm(index);
     case 'discover': return importModels(provider);
     case 'new-site': return siteForm();
+    case 'new-language': return siteForm(true);
+    case 'delete-language':
+      settings = await api('language-rule', { language: Object.keys(settings.languageRules)[index] });
+      return draw();
     case 'delete-site':
       settings = await api('site-rule', { host: Object.keys(settings.sites)[index] });
       return draw();
@@ -295,7 +411,15 @@ async function action(name, index, control) {
       const models = provider.models.filter((_, index) => index !== i);
       return saveProvider({ ...provider, models });
     }
-    case 'reset-prompt': container.querySelector('[name="prompt"]').value = defaults.prompt; return;
+    case 'reset-prompt':
+      for (const [key, value] of Object.entries(promptDefaults)) container.querySelector(`[name="${key}"]`).value = value;
+      return;
+    case 'copy-text': {
+      const value = container.querySelector('[name="result"]')?.value;
+      if (!value) return;
+      await navigator.clipboard.writeText(value);
+      return notify('已复制译文');
+    }
     case 'clear-cache':
       await api('cache-clear');
       await countCache();
@@ -349,7 +473,8 @@ async function translateFile(form, file, bilingual) {
         size += original.length;
         offset++;
       }
-      const results = await api('translate', { texts, target });
+      const context = ['srt', 'vtt'].includes(extension) ? { kind: 'subtitle' } : {};
+      const results = await api('translate', { texts, target, context });
       for (const result of results) {
         if (result.error) throw new Error(result.error);
         outputs.push(result.text);
@@ -407,11 +532,25 @@ document.addEventListener('submit', async event => {
       settings = await api('site-rule', { host: url.hostname, rule: data.get('rule') });
       editor.close();
       draw();
-    } else if (type === 'translation') {
+    } else if (type === 'language') {
+      settings = await api('language-rule', { language: data.get('language'), rule: data.get('rule') });
+      editor.close();
+      draw();
+    } else if (type === 'prompts') {
       settings = await api('preferences', { patch: Object.fromEntries(data) });
-      notify('文段设置已保存');
+      for (const key of Object.keys(promptDefaults)) form.elements[key].value = settings[key];
+      notify('已保存 AI 提示词');
     } else if (type === 'file') {
-      await translateFile(form, data.get('file'), data.has('bilingual'));
+      await translateFile(form, data.get('file'), data.get('output') === 'bilingual');
+    } else if (type === 'text') {
+      const text = data.get('text').trim();
+      if (!text) throw new Error('请输入要翻译的文字。');
+      form.elements.result.value = '';
+      formStatus(form, '翻译中…');
+      const [result] = await api('translate', { texts: [text], target: data.get('target'), context: { source: data.get('source') } });
+      if (result.error) throw new Error(result.error);
+      form.elements.result.value = result.text;
+      formStatus(form, '');
     }
   } catch (error) {
     if (form.querySelector('.form-status')) formStatus(form, error.message, true);

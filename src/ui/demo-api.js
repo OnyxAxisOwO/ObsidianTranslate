@@ -1,13 +1,11 @@
 import { activeModel, defaults, normalizeProvider, normalizeSettings, pageSettings } from '../shared/settings.js';
 
-const key = 'obsidian-translate-demo';
+const key = 'obsidian-translate-demo-v2';
 const sampleSettings = () => ({
   ...defaults,
   providers: [
     { id: 'openai-demo', name: 'OpenAI', protocol: 'openai', baseUrl: 'https://api.openai.com/v1', apiKey: 'demo',
       rps: 3, updated: 1, models: [{ id: 'gpt-4.1-mini', name: 'GPT-4.1 mini' }, { id: 'gpt-4.1', name: 'GPT-4.1' }] },
-    { id: 'anthropic-demo', name: 'Anthropic', protocol: 'anthropic', baseUrl: 'https://api.anthropic.com/v1',
-      apiKey: 'demo', rps: 2, updated: 1, models: [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }] },
   ],
 });
 const phrases = /* @__PURE__ */ new Map([
@@ -31,6 +29,10 @@ export async function demoRequest(type, message = {}) {
       delete settings.sites[message.host];
       if (message.rule) settings.sites[message.host] = message.rule;
       break;
+    case 'language-rule':
+      delete settings.languageRules[message.language];
+      if (message.rule) settings.languageRules[message.language] = message.rule;
+      break;
     case 'provider-save':
       provider = normalizeProvider({ ...message.provider, updated: Date.now(), apiKey: 'demo' });
       if (settings.providers.some(item => item.id === provider.id)) {
@@ -45,7 +47,7 @@ export async function demoRequest(type, message = {}) {
       return sampleSettings().providers.find(item => item.protocol === message.provider.protocol)?.models ||
         [{ id: 'gpt-4.1-mini', name: 'GPT-4.1 mini' }];
     case 'test': return '早上好。';
-    case 'options': window.open('options.html', '_blank', 'noopener'); return;
+    case 'options': window.open('options.html' + (message.section ? '#' + message.section : ''), '_blank', 'noopener'); return;
     case 'cache-count': return count;
     case 'cache-clear': count = 0; return;
     case 'translate':
@@ -62,12 +64,15 @@ export async function demoRequest(type, message = {}) {
 export function demoBrowser() {
   const listeners = [];
   const article = parent !== window ? parent : window;
+  let notifyStorage;
   return {
     runtime: {
       async sendMessage(message) {
         try {
           const value = await demoRequest(message.type, message);
-          return { ok: true, value: message.type === 'settings' ? pageSettings(value, location.hostname) : value };
+          const writes = ['preferences', 'site-rule'].includes(message.type);
+          if (writes) notifyStorage?.({ settings: true }, 'local');
+          return { ok: true, value: message.type === 'settings' || writes ? pageSettings(value, location.hostname) : value };
         } catch (error) {
           return { ok: false, error: error.message };
         }
@@ -75,6 +80,7 @@ export function demoBrowser() {
       onMessage: { addListener(listener) { listeners.push(listener); } },
     },
     storage: { onChanged: { addListener(listener) {
+      notifyStorage = listener;
       window.addEventListener('storage', event => {
         if (event.key === key) listener({ settings: true }, 'local');
       });

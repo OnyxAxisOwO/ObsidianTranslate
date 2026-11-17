@@ -1,11 +1,13 @@
 import { cache } from './cache.js';
 import { clearCache, discover, translate } from './translate.js';
-import { languages, normalizeProvider, normalizeSettings, modelRevision, own, pageSettings } from './shared/settings.js';
+import { activeModel, languages, modelKey, modelRevision, needsKey, normalizeProvider, normalizeSettings, own, pageSettings, promptDefaults } from './shared/settings.js';
 import { ext, reply } from './shared/webext.js';
 
 const uiProtocol = ext.runtime.getURL('/');
-const prefs = ['target', 'inputTarget', 'activeModel', 'view', 'scope', 'maxLength', 'batchSize',
-  'prompt', 'floating', 'selection', 'hover', 'captions', 'cache'];
+const pagePrefs = ['source', 'target', 'activeModel', 'view', 'scope', 'captions'];
+const prefs = [...pagePrefs, 'inputTarget', 'order', 'style', 'maxLength', 'batchSize',
+  'glossary', 'floating', 'selection', 'hover', 'inputSpaces', 'cache', ...Object.keys(promptDefaults)];
+const optionPages = ['reading', 'text', 'files', 'advanced', 'advanced/models', 'advanced/prompts', 'advanced/rules', 'advanced/cache'];
 let writes = Promise.resolve();
 
 async function load() {
@@ -54,25 +56,41 @@ ext.runtime.onMessage.addListener(reply(async (message, sender) => {
       if (message.revision != null && message.revision !== modelRevision(settings)) {
         throw new Error('翻译模型已更新，请重试。');
       }
-      return translate(settings, target, texts);
+      return translate(settings, target, texts, undefined, false, message.context);
     }
-    case 'options': return ext.runtime.openOptionsPage();
+    case 'options':
+      return optionPages.includes(message.section)
+        ? ext.tabs.create({ url: ext.runtime.getURL(`options.html#${message.section}`) }).then(() => null)
+        : ext.runtime.openOptionsPage();
+    case 'preferences': {
+      const allowed = ui ? prefs : pagePrefs;
+      if (!ui && !hostname) throw new Error('无法识别当前网站。');
+      const edited = await update(current => Object.assign(current, Object.fromEntries(
+        Object.entries(message.patch || {}).filter(([key]) => allowed.includes(key)),
+      )));
+      return ui ? edited : pageSettings(edited, hostname);
+    }
+    case 'site-rule': {
+      const host = ui ? message.host : hostname;
+      const edited = await update(current => {
+        if (!/^[-\w.:[\]]{1,255}$/.test(host || '')) return current;
+        const sites = { ...current.sites };
+        delete sites[host];
+        if (message.rule) Object.defineProperty(sites, host, { value: message.rule, enumerable: true });
+        return { ...current, sites };
+      });
+      return ui ? edited : pageSettings(edited, hostname);
+    }
     default:
       if (!ui) throw new Error('请在扩展设置中执行此操作。');
   }
   switch (message.type) {
-    case 'preferences':
-      return update(current => Object.assign(current, Object.fromEntries(
-        Object.entries(message.patch || {}).filter(([key]) => prefs.includes(key)),
-      )));
-    case 'site-rule':
+    case 'language-rule':
       return update(current => {
-        const sites = { ...current.sites };
-        delete sites[message.host];
-        if (message.rule && /^[-\w.:[\]]{1,255}$/.test(message.host)) {
-          Object.defineProperty(sites, message.host, { value: message.rule, enumerable: true });
-        }
-        return { ...current, sites };
+        const languageRules = { ...current.languageRules };
+        delete languageRules[message.language];
+        if (message.rule && own(languages, message.language)) languageRules[message.language] = message.rule;
+        return { ...current, languageRules };
       });
     case 'provider-save':
       return update(current => {
@@ -88,6 +106,10 @@ ext.runtime.onMessage.addListener(reply(async (message, sender) => {
         }
         if (message.replaceActive && current.activeModel === message.replaceActive.from) {
           current.activeModel = message.replaceActive.to;
+        }
+        const active = activeModel(current);
+        if ((!active || needsKey(active.provider)) && provider.models.length && !needsKey(provider)) {
+          current.activeModel = modelKey(provider, provider.models[0]);
         }
         return current;
       });

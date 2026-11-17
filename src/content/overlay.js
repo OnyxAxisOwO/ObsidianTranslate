@@ -1,4 +1,6 @@
 import { icon } from '../shared/icons.js';
+import panelStyle from '../shared/panel.css';
+import { mountPanel } from '../shared/panel.js';
 
 const style = `
 :host { all: initial; position: fixed; inset: 0; z-index: 2147483647; pointer-events: none; font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color-scheme: light dark; }
@@ -13,14 +15,9 @@ svg { width: 18px; height: 18px; vertical-align: middle; flex: none; }
 .orb { width: 45px; height: 45px; border-radius: 16px; color: var(--on-strong); background: var(--strong); box-shadow: 0 4px 18px #0003; }
 .orb:hover { background: var(--strong); transform: translateY(-2px); }
 .orb svg { width: 22px; height: 22px; }
-.panel, .tip { background: var(--surface); border-radius: 16px; box-shadow: 0 6px 35px #0002, 0 2px 7px #0001; animation: reveal .22s cubic-bezier(.2,.8,.2,1) both; }
-.panel { width: min(258px, calc(100vw - 40px)); padding: 12px; }
-.header { display: flex; align-items: center; justify-content: space-between; margin: 1px 0 9px 5px; font-weight: 700; }
-.header button { padding: 5px; } .header svg { width: 16px; height: 16px; }
-.status { color: var(--muted); font-size: 12px; margin: 0 5px 10px; max-height: 84px; overflow: auto; }
-.actions { display: grid; gap: 4px; }
-.actions button { display: flex; align-items: center; gap: 7px; }
-.primary { background: var(--strong); color: var(--on-strong); } .primary:hover { opacity: .84; background: var(--strong); }
+.tip { background: var(--surface); border-radius: 16px; box-shadow: 0 6px 35px #0002, 0 2px 7px #0001; animation: reveal .22s cubic-bezier(.2,.8,.2,1) both; }
+.ot-floating { animation: reveal .22s cubic-bezier(.2,.8,.2,1) both; }
+.ot-floating .ot-details { order: -1; }
 .tip { left: 0; top: 0; max-width: min(350px, calc(100vw - 16px)); max-height: min(48vh, 420px); padding: 5px; overflow: auto; }
 .tip header { display: flex; align-items: center; justify-content: space-between; padding-left: 9px; font-weight: 650; }
 .tip p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 3px 9px 8px; }
@@ -35,23 +32,16 @@ export function overlay(action) {
   const host = document.createElement('div');
   host.dataset.obsidianInterface = '';
   const shadow = host.attachShadow({ mode: 'closed' });
-  shadow.innerHTML = `<style>${style}</style><div class="root"><div class="anchor" hidden>
-    <div class="panel" hidden><div class="header">Obsidian Translate
-      <button type="button" data-action="options" aria-label="打开设置">${icon('settings')}</button></div>
-      <p class="status" aria-live="polite"></p>
-      <div class="actions">
-        <button type="button" class="primary" data-action="toggle">${icon('translate')}<span></span></button>
-        <button type="button" data-action="original" hidden>${icon('back')}显示原文</button>
-        <button type="button" data-action="whole">${icon('layers')}翻译整页</button>
-        <button type="button" data-action="view">${icon('sliders')}<span></span></button>
-      </div>
-    </div>
+  shadow.innerHTML = `<style>${style}
+${panelStyle}</style><div class="root"><div class="anchor" hidden>
+    <div class="ot-floating" hidden></div>
     <button type="button" class="orb" data-action="panel" aria-label="网页翻译菜单" aria-expanded="false">${icon('translate')}</button>
   </div><div class="tip" hidden></div><div class="caption" hidden></div></div>`;
   document.documentElement.append(host);
   const find = selector => shadow.querySelector(selector);
   const anchor = find('.anchor');
-  const panel = find('.panel');
+  const panel = find('.ot-floating');
+  const controls = mountPanel(panel, action);
   const orb = find('.orb');
   const tip = find('.tip');
   const caption = find('.caption');
@@ -73,13 +63,9 @@ export function overlay(action) {
   });
 
   return {
-    showStatus(state) {
+    showStatus(settings, state) {
       anchor.hidden = !state.floating;
-      find('.status').textContent = state.note;
-      const retry = state.running && state.paused;
-      find('[data-action="toggle"] span').textContent = retry ? '重试翻译' : state.running ? '显示原文' : '翻译网页';
-      find('[data-action="original"]').hidden = !retry;
-      find('[data-action="view"] span').textContent = state.view === 'bilingual' ? '切换为仅译文' : '切换为双语对照';
+      controls.update(settings, state);
     },
     closePanel() {
       panel.hidden = true;

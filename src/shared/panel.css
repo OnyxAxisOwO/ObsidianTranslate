@@ -1,0 +1,82 @@
+.ot-panel {
+  --ot-card: #fff;
+  --ot-subtle: #f2f2f5;
+  --ot-hover: #e6e6ea;
+  --ot-text: #19191d;
+  --ot-secondary: #62626d;
+  --ot-main: #202024;
+  --ot-on-main: #fff;
+  color: var(--ot-text);
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  text-align: start;
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  color-scheme: light dark;
+}
+.ot-panel *, .ot-panel *::before, .ot-panel *::after { box-sizing: border-box; }
+.ot-panel [hidden] { display: none !important; }
+.ot-main, .ot-details {
+  background: var(--ot-card);
+  border-radius: 17px;
+  padding: 12px;
+  box-shadow: 0 9px 34px #13131c22, 0 2px 6px #13131c0d;
+}
+.ot-main { width: 276px; max-width: calc(100vw - 28px); flex: none; }
+.ot-details {
+  width: 224px;
+  max-width: calc(100vw - 28px);
+  overflow: auto;
+  max-height: min(448px, calc(100dvh - 88px));
+  animation: ot-panel-in .24s cubic-bezier(.22,.78,.24,1) both;
+}
+.ot-head, .ot-actions { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.ot-head { min-height: 29px; margin-bottom: 8px; }
+.ot-heading { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 7px; margin-left: 3px; }
+.ot-heading svg { height: 17px; width: 17px; }
+.ot-panel button, .ot-panel select {
+  font: inherit; color: inherit; border: 0; border-radius: 9px;
+  background-color: var(--ot-subtle);
+}
+.ot-panel button {
+  min-height: 34px;
+  padding: 0 9px;
+  font-weight: 620;
+  cursor: pointer;
+  transition: background-color .17s ease, scale .19s ease;
+}
+.ot-panel button:focus-visible, .ot-panel select:focus-visible { outline: 2px solid #777887; outline-offset: 2px; }
+.ot-panel button:hover:not(:disabled) { background-color: var(--ot-hover); }
+.ot-panel button:active:not(:disabled) { scale: .97; }
+.ot-panel button:disabled { opacity: .38; cursor: default; }
+.ot-panel .ot-expand { min-width: 30px; min-height: 29px; padding: 0 6px; background: transparent; color: var(--ot-secondary); }
+.ot-main .ot-primary { background: var(--ot-main); color: var(--ot-on-main); }
+.ot-main .ot-primary:hover:not(:disabled) { background: var(--ot-main); opacity: .82; }
+.ot-actions { margin-top: 9px; }
+.ot-actions button { flex: 1; min-height: 37px; }
+.ot-actions svg, .ot-expand svg, .ot-link svg { width: 15px; height: 15px; vertical-align: -3px; margin-right: 4px; }
+.ot-expand svg { width: 17px; height: 17px; margin: 0; vertical-align: middle; }
+.ot-fields { display: grid; gap: 0; background: var(--ot-subtle); border-radius: 11px; padding: 2px 8px; }
+.ot-field { display: flex; align-items: center; justify-content: space-between; gap: 9px; min-height: 37px; }
+.ot-field span { color: var(--ot-secondary); font-size: 11.5px; white-space: nowrap; padding-inline-start: 1px; }
+.ot-field select {
+  appearance: none; width: 66%; min-width: 0; text-align: end; cursor: pointer;
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Cpath d='m4 5 3 3 3-3' fill='none' stroke='%23777784' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 2px center;
+  padding: 6px 17px 6px 3px; font-size: 12px; font-weight: 550;
+}
+.ot-field select:hover { background-color: var(--ot-hover); }
+.ot-details .ot-heading { font-size: 12px; }
+.ot-details .ot-field select { width: 61%; }
+.ot-details .ot-links { display: grid; gap: 3px; margin-top: 8px; }
+.ot-panel .ot-link { background: transparent; text-align: start; padding: 0 7px; min-height: 31px; font-size: 12px; }
+.ot-note { margin: 7px 3px 0; color: var(--ot-secondary); max-height: 66px; overflow: auto; overflow-wrap: anywhere; font-size: 11px; }
+.ot-note:empty { display: none; }
+@keyframes ot-panel-in { from { opacity: 0; transform: translateX(7px) scale(.98); } }
+@media (max-width: 560px) {
+  .ot-panel { flex-direction: column; align-items: flex-end; }
+  .ot-details { width: 276px; max-height: min(276px, calc(100dvh - 278px)); }
+}
+@media (prefers-color-scheme: dark) {
+  .ot-panel { --ot-card: #242428; --ot-subtle: #303035; --ot-hover: #3a3a40; --ot-text: #f3f3f6; --ot-secondary: #b9b9c0; --ot-main: #f3f3f6; --ot-on-main: #202024; }
+}
+@media (prefers-reduced-motion: reduce) { .ot-panel *, .ot-panel *::before, .ot-panel *::after { transition: none !important; animation: none !important; } }

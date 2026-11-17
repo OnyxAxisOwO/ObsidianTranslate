@@ -1,19 +1,45 @@
+export const promptDefaults = {
+  systemPrompt: 'You are a professional translator. Write fluent, faithful translations in {{to}}.',
+  translationPrompt: 'Preserve meaning, tone, terminology, names, and formatting. Leave text that is already in the target language as it is.',
+  userPrompt: '{{text}}',
+  batchSystemPrompt: 'Translate each item independently. Keep the original order and the same number of items.',
+  batchUserPrompt: '{{text}}',
+  subtitlePrompt: 'Translate this subtitle into {{to}}. Use natural, concise phrasing suitable for reading during playback.\n\n{{text}}',
+};
+
+const openAI = {
+  id: 'openai',
+  name: 'OpenAI',
+  protocol: 'openai',
+  baseUrl: 'https://api.openai.com/v1',
+  apiKey: '',
+  rps: 2,
+  models: [{ id: 'gpt-4.1-mini', name: 'GPT-4.1 mini' }],
+  updated: 1,
+};
+
 export const defaults = {
-  providers: [],
+  providers: [openAI],
   activeModel: '',
+  source: 'auto',
   target: 'zh-CN',
   inputTarget: 'en',
   view: 'translation',
+  order: 'original-first',
+  style: 'soft',
   scope: 'reading',
   maxLength: 5000,
   batchSize: 6,
-  prompt: 'Translate naturally and accurately into {{language}}. Preserve meaning, tone, names, terminology, punctuation, and formatting. Leave text that is already in the target language as it is.',
+  ...promptDefaults,
+  glossary: '',
   floating: true,
   selection: true,
   hover: true,
+  inputSpaces: false,
   captions: false,
   cache: true,
   sites: {},
+  languageRules: {},
 };
 
 export const protocols = {
@@ -43,10 +69,35 @@ export const languages = {
   uk: ['Українська', 'Ukrainian'],
   nl: ['Nederlands', 'Dutch'],
   pl: ['Polski', 'Polish'],
+  cs: ['Čeština', 'Czech'],
+  da: ['Dansk', 'Danish'],
+  el: ['Ελληνικά', 'Greek'],
+  fa: ['فارسی', 'Persian'],
+  fi: ['Suomi', 'Finnish'],
+  he: ['עברית', 'Hebrew'],
+  hu: ['Magyar', 'Hungarian'],
+  ms: ['Bahasa Melayu', 'Malay'],
+  no: ['Norsk', 'Norwegian'],
+  ro: ['Română', 'Romanian'],
+  sv: ['Svenska', 'Swedish'],
+  tl: ['Filipino', 'Filipino'],
 };
 
 export const own = (object, key) => Object.hasOwn(object, key);
 export const modelKey = (provider, model) => JSON.stringify([provider.id, model.id]);
+
+export function languageCode(value) {
+  if (typeof value !== 'string') return '';
+  if (own(languages, value)) return value;
+  const code = value.toLowerCase().replaceAll('_', '-');
+  const base = code.split('-')[0];
+  if (base === 'zh') return /-(tw|hk|mo|hant)(-|$)/.test(code) ? 'zh-TW' : 'zh-CN';
+  return own(languages, base) ? base : '';
+}
+
+export function needsKey(provider) {
+  return ['api.openai.com', 'api.anthropic.com'].includes(new URL(provider.baseUrl).hostname) && !provider.apiKey;
+}
 
 export function activeModel(settings) {
   for (const provider of settings.providers) {
@@ -62,9 +113,16 @@ export function modelRevision(settings) {
 }
 
 export function pageSettings({ providers, sites, ...settings }, hostname) {
+  const active = activeModel({ providers, activeModel: settings.activeModel });
   return {
     ...settings,
     sites: own(sites, hostname) ? { [hostname]: sites[hostname] } : {},
+    models: providers.flatMap(provider => provider.models.map(model => ({
+      key: modelKey(provider, model),
+      name: model.name,
+      provider: provider.name,
+    }))),
+    configured: !!active && !needsKey(active.provider),
     revision: modelRevision({ providers, activeModel: settings.activeModel }),
   };
 }
@@ -119,7 +177,8 @@ export function normalizeSettings(input = {}) {
   const settings = { ...defaults };
   settings.providers = [];
   const providerIds = new Set();
-  for (const item of Array.isArray(input.providers) ? input.providers.slice(0, 100) : []) {
+  const providers = Array.isArray(input.providers) ? input.providers.slice(0, 100) : defaults.providers;
+  for (const item of providers) {
     try {
       const provider = normalizeProvider(item);
       if (providerIds.has(provider.id)) continue;
@@ -132,20 +191,30 @@ export function normalizeSettings(input = {}) {
   for (const key of ['target', 'inputTarget']) {
     if (own(languages, input[key])) settings[key] = input[key];
   }
+  if (own(languages, input.source)) settings.source = input.source;
   if (['bilingual', 'translation'].includes(input.view)) settings.view = input.view;
+  if (['original-first', 'translation-first'].includes(input.order)) settings.order = input.order;
+  if (['plain', 'soft', 'accent'].includes(input.style)) settings.style = input.style;
   if (['reading', 'whole'].includes(input.scope)) settings.scope = input.scope;
   settings.maxLength = number(input.maxLength, defaults.maxLength, 300, 12000);
   settings.batchSize = number(input.batchSize, defaults.batchSize, 1, 20);
-  settings.prompt = text(input.prompt, 6000) || defaults.prompt;
-  for (const key of ['floating', 'selection', 'hover', 'captions', 'cache']) {
+  for (const [key, fallback] of Object.entries(promptDefaults)) {
+    settings[key] = text(input[key] ?? (key === 'translationPrompt' ? input.prompt : ''), 6000) || fallback;
+  }
+  settings.glossary = text(input.glossary, 4000);
+  for (const key of ['floating', 'selection', 'hover', 'inputSpaces', 'captions', 'cache']) {
     if (typeof input[key] === 'boolean') settings[key] = input[key];
   }
   settings.sites = Object.fromEntries(Object.entries(input.sites || {}).filter(([host, rule]) =>
     host.length < 256 && /^[\w.:[\]-]+$/.test(host) && ['always', 'never'].includes(rule)
   ).slice(0, 300));
+  settings.languageRules = Object.fromEntries(Object.entries(input.languageRules || {}).filter(([language, rule]) =>
+    own(languages, language) && ['always', 'never'].includes(rule)
+  ));
   settings.activeModel = text(input.activeModel, 500);
   if (!activeModel(settings)) {
-    const provider = settings.providers.find(item => item.models.length);
+    const provider = settings.providers.find(item => item.models.length && !needsKey(item)) ||
+      settings.providers.find(item => item.models.length);
     settings.activeModel = provider ? modelKey(provider, provider.models[0]) : '';
   }
   return settings;

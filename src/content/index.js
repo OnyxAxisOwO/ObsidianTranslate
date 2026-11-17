@@ -1,4 +1,4 @@
-import { defaults, own } from '../shared/settings.js';
+import { defaults, languageCode, own, promptDefaults } from '../shared/settings.js';
 import { ext, reply, request } from '../shared/webext.js';
 import { connectCaptions } from './captions.js';
 import { overlay } from './overlay.js';
@@ -10,6 +10,8 @@ const peripheral = 'nav,aside,footer,[role="navigation"],[role="complementary"],
 const primary = 'main,article,[role="main"]';
 let settings = defaults;
 let running = false;
+let autoSession = false;
+let detectedLanguage = '';
 let scope = 'reading';
 let view = defaults.view;
 let generation = 0;
@@ -30,8 +32,9 @@ const rows = new Map();
 const queue = new Set();
 const urgent = new Set();
 const changes = new Set();
-const ui = overlay(action => handle(action).catch(showError));
-const captions = connectCaptions(translateOne, ui);
+const spaceKeys = new WeakMap();
+const ui = overlay((action, value) => panelAction(action, value).catch(showError));
+const captions = connectCaptions(text => translateOne(text, settings.target, { kind: 'subtitle' }), ui);
 const near = new IntersectionObserver(entries => {
   for (const entry of entries) {
     if (!queue.has(entry.target)) continue;
@@ -45,18 +48,47 @@ function siteRule() {
   return own(settings.sites, location.hostname) ? settings.sites[location.hostname] : '';
 }
 
+function sourceLanguage() {
+  return settings.source === 'auto' ? detectedLanguage || 'auto' : settings.source;
+}
+
+function autoRule() {
+  return siteRule() || settings.languageRules[sourceLanguage()] || '';
+}
+
+async function detectLanguage(preferences) {
+  const declared = languageCode(document.documentElement.lang ||
+    document.querySelector('meta[http-equiv="content-language" i]')?.content);
+  if (declared || preferences.source !== 'auto') return declared;
+  if (!Object.keys(preferences.languageRules).length || !ext.i18n?.detectLanguage) return '';
+  const body = document.querySelector(primary) || document.body;
+  const sample = [...body.querySelectorAll('p,h1,h2')].slice(0, 15).map(el => sourceText(el)).join(' ').slice(0, 1600);
+  if (sample.length < 25) return '';
+  try {
+    const result = await ext.i18n.detectLanguage(sample);
+    return result?.isReliable ? languageCode(result.languages[0]?.language) : '';
+  } catch {
+    return '';
+  }
+}
+
+function context(extra) {
+  return { source: sourceLanguage(), title: document.title, ...extra };
+}
+
 function state() {
-  return { running, scope, view, note, translated, failures, paused, floating: ready && settings.floating && siteRule() !== 'never',
+  return { running, scope, view, note, translated, failures, paused, canRestore: running || !!rows.size,
+    floating: ready && settings.floating && siteRule() !== 'never',
     hostname: location.hostname, site: siteRule() };
 }
 
 function status(message) {
-  note = message ?? (!settings.activeModel ? '请先在设置中添加翻译模型。' : !running
+  note = message ?? (!settings.configured ? '请先在高级设置中配置模型。' : !running
     ? '当前显示网页原文'
     : failures ? `已翻译 ${translated} 段 · ${failures} 段失败`
       : held || queue.size ? `翻译中 · 已完成 ${translated} 段`
         : translated ? `已翻译 ${translated} 段` : '暂无可翻译的文段');
-  ui.showStatus(state());
+  ui.showStatus(settings, state());
 }
 
 function showError(error) {
@@ -72,19 +104,63 @@ function selectionText() {
   return { text, rect: current.getRangeAt(0).getBoundingClientRect() };
 }
 
-function sourceText(element) {
-  const walker = document.createTreeWalker(element, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      if (node instanceof Element && node.matches(ignored)) return NodeFilter.FILTER_REJECT;
-      if (node.nodeType === Node.TEXT_NODE || node.nodeName === 'BR') return NodeFilter.FILTER_ACCEPT;
-      return NodeFilter.FILTER_SKIP;
-    },
-  });
-  const parts = [];
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    parts.push(node.nodeName === 'BR' ? '\n' : node.data);
+function sourceText(element, links) {
+  let text = '';
+  for (const child of element.childNodes) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      text += child.data;
+    } else if (child instanceof Element && !child.matches(ignored)) {
+      if (child.tagName === 'BR') {
+        text += '\n';
+      } else if (links && child.matches('a[href]')) {
+        const label = sourceText(child);
+        if (!label.trim()) continue;
+        const index = links.push(child) - 1;
+        text += `<ot-link-${index}>${label}</ot-link-${index}>`;
+      } else {
+        text += sourceText(child, links);
+      }
+    }
   }
-  return parts.join('').trim();
+  return text;
+}
+
+function translatedLink(original, label) {
+  const link = document.createElement('a');
+  for (const name of ['href', 'target', 'rel', 'download']) {
+    const value = original.getAttribute(name);
+    if (value != null && !(name === 'href' && /^\s*(javascript|data):/i.test(value))) link.setAttribute(name, value);
+  }
+  link.textContent = label;
+  link.setAttribute('aria-label', label === '↗' ? original.textContent.trim() : label);
+  link.addEventListener('click', event => {
+    if (event.button || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+    event.preventDefault();
+    original.click();
+  });
+  return link;
+}
+
+function translatedContents(output, text, links) {
+  if (!links.length) {
+    output.textContent = text;
+    return;
+  }
+  const stripTags = value => value.replace(/<\/?ot-link-\d+>/gi, '');
+  const used = new Set();
+  let offset = 0;
+  for (const match of text.matchAll(/<ot-link-(\d+)>([\s\S]*?)<\/ot-link-\1>/gi)) {
+    output.append(stripTags(text.slice(offset, match.index)));
+    const index = Number(match[1]);
+    const label = stripTags(match[2]);
+    output.append(links[index] ? translatedLink(links[index], label) : label);
+    used.add(index);
+    offset = match.index + match[0].length;
+  }
+  output.append(stripTags(text.slice(offset)));
+  for (const [index, original] of links.entries()) {
+    if (!used.has(index)) output.append(' ', translatedLink(original, '↗'));
+  }
 }
 
 function inScope(el) {
@@ -110,6 +186,7 @@ function erase(el, row) {
 
 function render(el, row) {
   if (!row.text || !el.isConnected) return;
+  if (row.text === row.original) return erase(el, row);
   if (view === 'translation') {
     if (row.source?.parentNode !== el) {
       row.source = document.createElement('span');
@@ -123,37 +200,42 @@ function render(el, row) {
     row.source.replaceWith(...row.source.childNodes);
     row.source = null;
   }
-  if (row.text === row.original && view === 'bilingual') {
-    row.output?.remove();
-    row.output = null;
-    return;
-  }
   if (!row.output) {
     row.output = document.createElement('span');
     row.output.dataset.obsidianTranslation = '';
     row.output.translate = false;
     row.output.lang = settings.target;
     row.output.dir = 'auto';
-    row.output.textContent = row.text;
+    translatedContents(row.output, row.text, row.links);
   }
   if (row.output.parentNode !== el) el.append(row.output);
   row.output.dataset.view = view;
+  row.output.dataset.style = settings.style;
+  if (view === 'bilingual' && settings.order === 'translation-first') {
+    if (row.output !== el.firstChild) el.prepend(row.output);
+    row.output.dataset.first = '';
+  } else {
+    if (row.output !== el.lastChild) el.append(row.output);
+    delete row.output.dataset.first;
+  }
 }
 
-function readOriginal(el, row) {
+function readOriginal(el, row, links) {
   if (row?.source?.parentNode === el) {
     const children = [...el.childNodes];
-    if (children.every(node => node === row.source || node === row.output)) return sourceText(row.source);
+    if (children.every(node => node === row.source || node === row.output)) return sourceText(row.source, links).trim();
     erase(el, row);
   }
-  return sourceText(el);
+  return sourceText(el, links).trim();
 }
 
 function add(el, force = false) {
   if (!qualifies(el, force)) return;
   const old = rows.get(el);
-  const original = readOriginal(el, old);
-  if (old && original === old.original) {
+  const links = [];
+  const original = readOriginal(el, old, links);
+  if (old && original === old.original && links.length === old.links.length &&
+      links.every((link, i) => link === old.links[i])) {
     if (old.text && old.output?.parentNode !== el && old.text !== old.original) render(el, old);
     return;
   }
@@ -167,7 +249,7 @@ function add(el, force = false) {
   }
   if (original.length < (force || scope === 'whole' ? 1 : 2) || original.length > 100000 || !/\p{L}/u.test(original)) return;
   if (!force && el.getClientRects().length === 0) return;
-  rows.set(el, { original });
+  rows.set(el, { original, links });
   queue.add(el);
   if (force) urgent.add(el);
   near.observe(el);
@@ -194,11 +276,12 @@ function reset() {
   paused = false;
 }
 
-function start(nextScope) {
+function start(nextScope, automatic = false) {
   if (siteRule() === 'never') throw new Error('此网站已设为永不翻译。');
-  if (!settings.activeModel) throw new Error('请先在设置中添加翻译模型。');
+  if (!settings.configured) throw new Error('请先在高级设置中配置模型。');
   reset();
   running = true;
+  autoSession = automatic;
   scope = nextScope;
   hasPrimary = !!document.querySelector(primary);
   scan(document.body);
@@ -208,6 +291,7 @@ function start(nextScope) {
 
 function stop() {
   running = false;
+  autoSession = false;
   reset();
   status();
 }
@@ -237,7 +321,7 @@ async function pump() {
   schedulePump(0);
   try {
     const results = await request('translate', { texts: chunk.map(([, row]) => row.original),
-      target: settings.target, revision: settings.revision });
+      target: settings.target, revision: settings.revision, context: context() });
     if (version !== generation) return;
     let firstError = '';
     results.forEach((result, i) => {
@@ -280,8 +364,8 @@ function urgentlyRemove(el) {
   near.unobserve(el);
 }
 
-async function translateOne(text, target = settings.target) {
-  const [result] = await request('translate', { texts: [text], target, revision: settings.revision });
+async function translateOne(text, target = settings.target, extra) {
+  const [result] = await request('translate', { texts: [text], target, revision: settings.revision, context: context(extra) });
   if (result.error) throw new Error(result.error);
   return result.text;
 }
@@ -296,12 +380,25 @@ async function translateInput(selected) {
   const isField = 'value' in field;
   const before = isField ? field.value : field.innerText;
   const chosen = isField ? field.value.slice(field.selectionStart, field.selectionEnd) : getSelection()?.toString();
-  const text = (selected || chosen || before).trim();
+  let text = (selected || chosen || before).trim();
+  let target = settings.inputTarget;
+  const command = text.match(/^\/([a-z][\w-]*)\s+/i);
+  if (command) {
+    const language = languageCode(command[1] === 'zht' ? 'zh-TW' : command[1]);
+    if (language) {
+      target = language;
+      text = text.slice(command[0].length);
+    }
+  }
+  const marker = text.match(/(^|\s)\/\/(?=\S)/);
+  const partialStart = marker ? marker.index + marker[1].length : -1;
+  const prefix = partialStart < 0 ? '' : text.slice(0, partialStart);
+  if (partialStart >= 0) text = text.slice(partialStart + 2);
   if (!text) throw new Error('输入框里没有可翻译的文字。');
   const from = isField && chosen ? field.selectionStart : 0;
   const to = isField && chosen ? field.selectionEnd : before.length;
   const range = !isField && chosen && getSelection()?.rangeCount ? getSelection().getRangeAt(0).cloneRange() : null;
-  const result = await translateOne(text, settings.inputTarget);
+  const result = prefix + await translateOne(text, target, { source: 'auto', title: '' });
   if (!field.isConnected || document.activeElement !== field || (isField ? field.value : field.innerText) !== before) {
     ui.hint(result);
     return;
@@ -326,6 +423,11 @@ async function translateInput(selected) {
 
 async function handle(action, message = {}) {
   if (action === 'options') return request('options');
+  if (action === 'refresh') {
+    await sync();
+    return state();
+  }
+  if (action === 'translate-page' && (!running || paused)) start(settings.scope);
   if (action === 'original') stop();
   if (action === 'toggle') {
     if (running && paused) start(scope);
@@ -364,32 +466,57 @@ async function handle(action, message = {}) {
   return state();
 }
 
+async function panelAction(action, value) {
+  if (['text', 'files', 'advanced'].includes(action)) {
+    return request('options', { section: action });
+  }
+  if (action === 'translate-page' && !settings.configured) {
+    return request('options', { section: 'advanced/models' });
+  }
+  if (action === 'site') {
+    await request('site-rule', { rule: value });
+    return sync();
+  }
+  if (['source', 'target', 'activeModel', 'view', 'scope', 'captions'].includes(action)) {
+    await request('preferences', { patch: { [action]: action === 'captions' ? value === 'true' : value } });
+    return sync();
+  }
+  return handle(action);
+}
+
 let settingsRead = 0;
 
-async function sync() {
+async function sync(navigated = false) {
   const read = ++settingsRead;
   const previous = settings;
   const next = await request('settings');
+  const nextLanguage = await detectLanguage(next);
   if (read !== settingsRead) return;
-  const previousRule = siteRule();
+  const previousRule = autoRule();
+  const previousLanguage = sourceLanguage();
+  detectedLanguage = nextLanguage;
   settings = next;
   ready = true;
   const restart = previous.revision !== settings.revision || previous.target !== settings.target ||
-    previous.prompt !== settings.prompt || previous.scope !== settings.scope ||
-    previous.maxLength !== settings.maxLength;
-  if (previous.view !== settings.view) {
+    previousLanguage !== sourceLanguage() || previous.scope !== settings.scope ||
+    previous.maxLength !== settings.maxLength || previous.glossary !== settings.glossary ||
+    Object.keys(promptDefaults).some(key => previous[key] !== settings[key]);
+  if (previous.view !== settings.view || previous.order !== settings.order || previous.style !== settings.style) {
     view = settings.view;
     for (const [el, row] of rows) render(el, row);
   }
   if (restart) captions(false);
-  captions(!!settings.activeModel && settings.captions && siteRule() !== 'never');
-  if (siteRule() === 'never' || !settings.activeModel) {
+  captions(!!settings.configured && settings.captions && siteRule() !== 'never');
+  if (siteRule() === 'never' || !settings.configured || (autoSession && autoRule() === 'never')) {
     stop();
-  } else if ((!running && previousRule !== 'always' && siteRule() === 'always') || (running && restart)) {
-    start(previous.scope !== settings.scope ? settings.scope : scope);
+  } else if (running && (restart || navigated)) {
+    start(previous.scope !== settings.scope ? settings.scope : scope, autoSession);
+  } else if (!running && (navigated || previousRule !== 'always' || !previous.configured) && autoRule() === 'always') {
+    start(settings.scope, true);
   } else if (restart && rows.size) {
     stop();
   } else {
+    if (!running) scope = settings.scope;
     status();
   }
 }
@@ -406,7 +533,7 @@ const watcher = new MutationObserver(records => {
   const url = location.pathname + location.search;
   if (lastUrl !== url) {
     lastUrl = url;
-    if (running || (siteRule() === 'always' && settings.activeModel)) start(running ? scope : settings.scope);
+    sync(true).catch(showError);
   }
   if (!running) return;
   for (const { target, addedNodes } of records) {
@@ -460,8 +587,22 @@ document.addEventListener('keydown', event => {
     ui.closePanel();
     ui.hideSelection();
   }
+  const field = editable(document.activeElement);
+  if (field && settings.inputSpaces && settings.configured && !event.isComposing && !event.repeat) {
+    const previous = spaceKeys.get(field);
+    if (event.key !== ' ' || event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) {
+      spaceKeys.delete(field);
+    } else if (previous?.count === 2 && event.timeStamp - previous.time < 550) {
+      event.preventDefault();
+      spaceKeys.delete(field);
+      translateInput().catch(showError);
+    } else {
+      const count = previous && event.timeStamp - previous.time < 550 ? previous.count + 1 : 1;
+      spaceKeys.set(field, { count, time: event.timeStamp });
+    }
+  }
   if (event.key !== 'Shift' || event.repeat || event.altKey || event.ctrlKey || event.metaKey ||
-      !settings.hover || !settings.activeModel || siteRule() === 'never' || !hoverTarget || editable(document.activeElement)) return;
+      !settings.hover || !settings.configured || siteRule() === 'never' || !hoverTarget || field) return;
   paused = false;
   add(hoverTarget, true);
   if (queue.has(hoverTarget)) urgent.add(hoverTarget);
