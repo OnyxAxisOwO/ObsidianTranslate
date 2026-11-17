@@ -1,0 +1,75 @@
+import { build } from 'esbuild';
+import { mkdir, readdir, writeFile, cp } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+
+process.chdir(fileURLToPath(new URL('..', import.meta.url)));
+const targets = ['chrome', 'firefox', 'safari', 'demo'];
+const icons = Object.fromEntries([16, 32, 48, 128].map(size => [size, `icons/${size}.png`]));
+const entries = {
+  background: 'src/background.js',
+  content: 'src/content/index.js',
+  popup: 'src/ui/popup.js',
+  options: 'src/ui/options.js',
+};
+const manifest = {
+  manifest_version: 3,
+  name: 'Obsidian Translate',
+  version: '0.1.0',
+  description: '开源双语浏览器翻译扩展，支持自定义 OpenAI 和 Anthropic API。',
+  icons,
+  permissions: ['storage', 'contextMenus'],
+  host_permissions: ['http://*/*', 'https://*/*'],
+  action: { default_title: 'Obsidian Translate', default_popup: 'popup.html', default_icon: icons },
+  options_ui: { page: 'options.html', open_in_tab: true },
+  content_scripts: [{
+    matches: ['http://*/*', 'https://*/*'],
+    js: ['content.js'],
+    css: ['page.css'],
+    run_at: 'document_idle',
+  }],
+  commands: {
+    toggle: { suggested_key: { default: 'Alt+Shift+T' }, description: '翻译网页 / 显示原文' },
+    whole: { description: '翻译整页' },
+    input: { suggested_key: { default: 'Alt+Shift+I' }, description: '翻译当前输入框' },
+  },
+};
+const backgrounds = {
+  chrome: { service_worker: 'background.js' },
+  firefox: { scripts: ['background.js'] },
+  safari: { service_worker: 'background.js' },
+};
+
+await Promise.all(targets.map(async target => {
+  const outdir = `dist/${target}`;
+  await mkdir(outdir, { recursive: true });
+  const demo = target === 'demo';
+  const entryPoints = demo
+    ? { ...entries, demo: 'src/ui/demo.js' }
+    : entries;
+  await Promise.all([
+    build({
+      entryPoints,
+      bundle: true,
+      minify: !demo,
+      target: ['chrome120', 'firefox121', 'safari17.4'],
+      outdir,
+      define: { DEMO: JSON.stringify(demo) },
+    }),
+    cp('src/icons', `${outdir}/icons`, { recursive: true }),
+    ...(await readdir('src/ui')).filter(name => /\.(css|html)$/.test(name) &&
+      (demo || !['index.html', 'demo.css'].includes(name))).map(name => cp(`src/ui/${name}`, `${outdir}/${name}`)),
+    cp('src/content/page.css', `${outdir}/page.css`),
+    ...(demo ? [] : [writeFile(`${outdir}/manifest.json`, JSON.stringify({
+      ...manifest,
+      background: backgrounds[target],
+      ...(target === 'safari' ? { options_ui: { page: 'options.html' } } : {}),
+      ...(target === 'firefox' ? {
+        browser_specific_settings: { gecko: {
+          id: 'obsidian-translate@onyxaxis.dev',
+          strict_min_version: '142.0',
+          data_collection_permissions: { required: ['websiteContent'], optional: [] },
+        } },
+      } : {}),
+    }, null, 2) + '\n')]),
+  ]);
+}));

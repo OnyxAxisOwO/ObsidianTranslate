@@ -1,0 +1,16 @@
+[data-obsidian-translation] {
+  display: block !important;
+  color: inherit;
+  font: inherit;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  margin-block-start: .45em;
+  text-decoration: none;
+}
+[data-obsidian-translation][data-view="bilingual"] { opacity: .8; }
+[data-obsidian-translation][data-view="translation"] { margin-block-start: 0; }
+[data-obsidian-source][hidden], [data-obsidian-translation][hidden] { display: none !important; }
+:is(a, button, label, summary) > [data-obsidian-translation]:not([data-view="translation"]) {
+  display: inline !important;
+  margin: 0 0 0 .4em;
+}

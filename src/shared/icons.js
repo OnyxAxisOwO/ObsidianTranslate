@@ -1,0 +1,25 @@
+const paths = {
+  translate: '<path d="m13 20 4-9 4 9m-6.7-3h5.4M3 6h11M8.5 3v3M12 6c-1 5-3.8 8-8 10m1-7c1.2 2.5 3 4.1 5.3 5.4"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="m10 3-.7 2.2-2 .9-2.1-1-2 3.5L5 10v2.5l-1.8 1.6 2 3.5 2.1-1 2 .9.7 2.5h4l.7-2.5 2-.9 2.1 1 2-3.5-1.8-1.6V10l1.8-1.4-2-3.5-2.1 1-2-.9L14 3z"/>',
+  stack: '<rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01m4-10h4m-4 10h4"/>',
+  globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c4 4 4 13 0 17-4-4-4-13 0-17Z"/>',
+  disk: '<ellipse cx="12" cy="6" rx="7.5" ry="3"/><path d="M4.5 6v12c0 4 15 4 15 0V6m-15 6c0 4 15 4 15 0"/>',
+  sliders: '<path d="M4 7h6m4 0h6M4 17h10m4 0h2"/><circle cx="12" cy="7" r="2"/><circle cx="16" cy="17" r="2"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  search: '<circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4 4"/>',
+  close: '<path d="m6 6 12 12M18 6 6 18"/>',
+  arrow: '<path d="M4 12h15m-5-5 5 5-5 5"/>',
+  back: '<path d="M20 12H5m5-5-5 5 5 5"/>',
+  external: '<path d="M13 4h7v7m0-7-9 9m8 0v6H5V5h6"/>',
+  down: '<path d="m7 10 5 5 5-5"/>',
+  right: '<path d="m10 7 5 5-5 5"/>',
+  check: '<path d="m5 12 4 4L19 6"/>',
+  play: '<path d="m8 5 11 7-11 7z"/>',
+  trash: '<path d="M4 7h16m-10-3h4m4 3-1 13H7L6 7m4 4v5m4-5v5"/>',
+  cube: '<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Zm-8 4.5 8 4.5 8-4.5M12 12v9m-4-15.75 8 4.5"/>',
+  layers: '<path d="m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5m-18 4 9 5 9-5"/>',
+  file: '<path d="M13 3H6v18h12V8zm0 0v5h5M9 12h6m-6 4h6"/>',
+  copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
+};
+
+export const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
