@@ -3,6 +3,12 @@ import { translationMessages } from './prompts.js';
 
 function endpoint(provider, route, query) {
   const url = new URL(provider.baseUrl);
+  if (protocols[provider.protocol].machine) {
+    const base = url.pathname.replace(/\/+$/, '');
+    url.pathname = route && !base.endsWith(route) ? base + route : base;
+    for (const [key, value] of new URLSearchParams(query)) url.searchParams.set(key, value);
+    return url;
+  }
   const base = url.pathname.replace(/\/+$/, '').replace(/\/(?:chat\/completions|responses|messages|models)$/, '');
   url.pathname = (base || '/v1') + route;
   for (const [key, value] of new URLSearchParams(query)) url.searchParams.set(key, value);
@@ -18,7 +24,11 @@ export async function upstream(provider, route, data, query) {
       headers['anthropic-dangerous-direct-browser-access'] = 'true';
     }
     if (provider.apiKey) headers['x-api-key'] = provider.apiKey;
-  } else if (provider.apiKey) {
+  } else if (provider.protocol === 'deepl') {
+    headers.Authorization = 'DeepL-Auth-Key ' + provider.apiKey;
+  } else if (provider.protocol === 'google') {
+    headers['X-Goog-Api-Key'] = provider.apiKey;
+  } else if (provider.apiKey && !protocols[provider.protocol].machine) {
     headers.Authorization = `Bearer ${provider.apiKey}`;
   }
   if (data) headers['Content-Type'] = 'application/json';
@@ -35,7 +45,8 @@ export async function upstream(provider, route, data, query) {
     });
     const json = await response.json().catch(() => null);
     if (!response.ok) {
-      const detail = typeof json?.error?.message === 'string' ? json.error.message.slice(0, 350) : '';
+      const description = json?.error?.message ?? json?.message ?? json?.error;
+      const detail = typeof description === 'string' ? description.slice(0, 350) : '';
       const error = new Error(`API 请求失败（HTTP ${response.status}）${detail ? ` · ${detail}` : ''}`);
       error.status = response.status;
       throw error;
@@ -83,6 +94,7 @@ export async function generate(provider, model, system, user, maxTokens) {
 }
 
 export async function translateBatch(provider, model, settings, target, texts, context) {
+  if (protocols[provider.protocol].machine) return translateMachine(provider, target, texts, context.source);
   const many = texts.length > 1;
   const { system, user } = translationMessages(settings, target, texts, context);
   const length = texts.reduce((total, text) => total + text.length, 0);
@@ -99,4 +111,57 @@ export async function translateBatch(provider, model, settings, target, texts, c
   const error = new Error('模型未按顺序返回文段。');
   error.invalidBatch = true;
   throw error;
+}
+
+const entities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0' };
+const escapeMarkup = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+function decodeMarkup(text) {
+  return text.replace(/&(amp|lt|gt|quot|apos|nbsp|#\d+|#x[\da-f]+);/gi, (entity, value) => {
+    if (value[0] !== '#') return entities[value.toLowerCase()];
+    const point = value[1].toLowerCase() === 'x' ? parseInt(value.slice(2), 16) : Number(value.slice(1));
+    return point <= 0x10ffff ? String.fromCodePoint(point) : entity;
+  });
+}
+
+async function translateMachine(provider, target, texts, source) {
+  const { protocol } = provider;
+  const route = protocols[protocol].route;
+  const detected = source === 'auto' ? undefined : source;
+  // Our link markers use unique tag names. Encode them as real links for engines in HTML mode.
+  const hasLinks = texts.some(text => /<ot-link-\d+>/.test(text));
+  const encoded = hasLinks ? texts.map(text => escapeMarkup(text)
+    .replace(/&lt;ot-link-(\d+)&gt;/g, '<a href="#ot-link-$1">')
+    .replace(/&lt;\/ot-link-\d+&gt;/g, '</a>')) : texts;
+  let translated;
+  if (protocol === 'deepl') {
+    const codes = { 'zh-CN': 'ZH-HANS', 'zh-TW': 'ZH-HANT', en: 'EN-US', pt: 'PT-PT', no: 'NB' };
+    const result = await upstream(provider, route, {
+      text: encoded,
+      target_lang: codes[target] || target.toUpperCase(),
+      source_lang: detected?.startsWith('zh-') ? 'ZH' : detected === 'no' ? 'NB' : detected?.toUpperCase(),
+      tag_handling: hasLinks ? 'html' : undefined,
+    });
+    translated = result.translations?.map(item => item.text);
+  } else if (protocol === 'google') {
+    const result = await upstream(provider, route, { q: encoded, source: detected, target, format: hasLinks ? 'html' : 'text' });
+    translated = result.data?.translations?.map(item => item.translatedText);
+  } else {
+    const codes = { 'zh-CN': 'zh', 'zh-TW': 'zt', no: 'nb' };
+    const result = await upstream(provider, route, {
+      q: encoded, source: codes[detected] || detected || 'auto', target: codes[target] || target,
+      format: hasLinks ? 'html' : 'text', api_key: provider.apiKey || undefined,
+    });
+    translated = Array.isArray(result.translatedText) ? result.translatedText : [result.translatedText];
+  }
+  if (!Array.isArray(translated) || translated.length !== texts.length ||
+      translated.some(text => typeof text !== 'string' || !text.trim())) {
+    throw new Error('翻译服务返回的译文数量或格式有误。');
+  }
+  return translated.map(text => {
+    if (!hasLinks) return (protocol === 'google' ? decodeMarkup(text) : text).trim();
+    const markers = text.replace(/<a\b[^>]*\bhref\s*=\s*["']#ot-link-(\d+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+      (_, index, label) => '<ot-link-' + index + '>' + label + '</ot-link-' + index + '>');
+    return decodeMarkup(markers).trim();
+  });
 }

@@ -8,7 +8,7 @@ const destination = resolve('dist', 'release', `v${version}`);
 await mkdir(destination, { recursive: true });
 const staging = await mkdtemp(join(destination, '.pack-'));
 const files = ['manifest.json', 'background.js', 'content.js', 'page.css',
-  'popup.html', 'popup.js', 'options.html', 'options.js', 'ui.css', 'icons', 'LICENSE'];
+  'popup.html', 'popup.js', 'options.html', 'options.js', 'ui.css', 'icons', 'LICENSE', 'pdfjs', 'FFLATE-LICENSE', 'ocr'];
 
 try {
   for (const browser of ['chrome', 'firefox', 'safari']) {

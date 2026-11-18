@@ -16,10 +16,11 @@ const manifest = {
   manifest_version: 3,
   name: 'Obsidian Translate',
   version,
-  description: '开源双语浏览器翻译扩展，支持自定义 OpenAI 和 Anthropic API。',
+  description: '开源双语浏览器翻译扩展，支持自定义模型、机器翻译和文档翻译。',
   icons,
   permissions: ['storage', 'contextMenus'],
   host_permissions: ['http://*/*', 'https://*/*'],
+  content_security_policy: { extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'" },
   action: { default_title: 'Obsidian Translate', default_popup: 'popup.html', default_icon: icons },
   options_ui: { page: 'options.html', open_in_tab: true },
   content_scripts: [{
@@ -27,6 +28,7 @@ const manifest = {
     js: ['content.js'],
     css: ['page.css'],
     run_at: 'document_idle',
+    all_frames: true,
   }],
   commands: {
     toggle: { suggested_key: { default: 'Alt+Shift+T' }, description: '翻译网页 / 显示原文' },
@@ -61,6 +63,21 @@ await Promise.all(targets.map(async target => {
     ...(await readdir('src/ui')).filter(name => /\.(css|html)$/.test(name) &&
       (demo || !['index.html', 'demo.css'].includes(name))).map(name => cp(`src/ui/${name}`, `${outdir}/${name}`)),
     cp('src/content/page.css', `${outdir}/page.css`),
+    mkdir(`${outdir}/pdfjs`, { recursive: true }).then(() => Promise.all([
+      cp('node_modules/pdfjs-dist/legacy/build/pdf.min.mjs', `${outdir}/pdfjs/pdf.mjs`),
+      cp('node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs', `${outdir}/pdfjs/pdf.worker.mjs`),
+      cp('node_modules/pdfjs-dist/LICENSE', `${outdir}/pdfjs/LICENSE`),
+      cp('node_modules/pdfjs-dist/cmaps', `${outdir}/pdfjs/cmaps`, { recursive: true }),
+      cp('node_modules/pdfjs-dist/standard_fonts', `${outdir}/pdfjs/standard_fonts`, { recursive: true }),
+    ])),
+    cp('node_modules/fflate/LICENSE', `${outdir}/FFLATE-LICENSE`),
+    mkdir(`${outdir}/ocr`, { recursive: true }).then(() => Promise.all([
+      cp('node_modules/tesseract.js/dist/tesseract.esm.min.js', `${outdir}/ocr/tesseract.mjs`),
+      cp('node_modules/tesseract.js/dist/worker.min.js', `${outdir}/ocr/worker.min.js`),
+      ...['tesseract-core-lstm.wasm.js', 'tesseract-core-simd-lstm.wasm.js', 'LICENSE'].map(name =>
+        cp(`node_modules/tesseract.js-core/${name}`, `${outdir}/ocr/${name}`)),
+      cp('node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz', `${outdir}/ocr/eng.traineddata.gz`),
+    ])),
     ...(demo ? [] : [cp('LICENSE', `${outdir}/LICENSE`), writeFile(`${outdir}/manifest.json`, JSON.stringify({
       ...manifest,
       background: backgrounds[target],

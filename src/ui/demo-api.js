@@ -1,4 +1,5 @@
-import { activeModel, defaults, normalizeProvider, normalizeSettings, pageSettings } from '../shared/settings.js';
+import { activeModel, applyPagePreferences, defaults, normalizeProvider, normalizeSettings, normalizeSiteProfile,
+  pageSettings, resolvePage, restoreSettings } from '../shared/settings.js';
 
 const key = 'obsidian-translate-demo-v2';
 const sampleSettings = () => ({
@@ -24,8 +25,17 @@ export async function demoRequest(type, message = {}) {
   let provider;
   switch (type) {
     case 'settings': return settings;
-    case 'preferences': Object.assign(settings, message.patch); break;
+    case 'preferences':
+      applyPagePreferences(settings, message.url ? resolvePage(settings, message.url) : null, message.patch);
+      break;
     case 'site-rule':
+      if (message.url) {
+        const profile = resolvePage(settings, message.url).profiles.findLast(item => Object.hasOwn(item.overrides, 'policy'));
+        if (profile) {
+          profile.overrides.policy = message.rule || 'manual';
+          break;
+        }
+      }
       delete settings.sites[message.host];
       if (message.rule) settings.sites[message.host] = message.rule;
       break;
@@ -37,6 +47,18 @@ export async function demoRequest(type, message = {}) {
       delete settings.languageRules[message.language];
       if (message.rule) settings.languageRules[message.language] = message.rule;
       break;
+    case 'site-profile-save': {
+      const profile = normalizeSiteProfile(message.profile, settings);
+      if (settings.siteProfiles.some(item => item.pattern === profile.pattern && item.pattern !== message.previous)) {
+        throw new Error('已存在相同的网址规则。');
+      }
+      settings.siteProfiles = [...settings.siteProfiles.filter(item => item.pattern !== message.previous), profile];
+      break;
+    }
+    case 'site-profile-delete':
+      settings.siteProfiles = settings.siteProfiles.filter(item => item.pattern !== message.pattern);
+      break;
+    case 'settings-import': Object.assign(settings, restoreSettings(message.backup)); break;
     case 'provider-save':
       provider = normalizeProvider({ ...message.provider, updated: Date.now(), apiKey: 'demo' });
       if (settings.providers.some(item => item.id === provider.id)) {
@@ -74,10 +96,11 @@ export function demoBrowser() {
       async sendMessage(message) {
         try {
           const scoped = ['site-rule', 'floating-site'].includes(message.type);
-          const value = await demoRequest(message.type, scoped ? { ...message, host: location.hostname } : message);
+          const value = await demoRequest(message.type, { ...message, url: location.href,
+            ...(scoped ? { host: location.hostname } : {}) });
           const writes = ['preferences', 'site-rule', 'floating-site'].includes(message.type);
           if (writes) notifyStorage?.({ settings: true }, 'local');
-          return { ok: true, value: message.type === 'settings' || writes ? pageSettings(value, location.hostname) : value };
+          return { ok: true, value: message.type === 'settings' || writes ? pageSettings(value, location.href) : value };
         } catch (error) {
           return { ok: false, error: error.message };
         }

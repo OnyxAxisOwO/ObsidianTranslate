@@ -1,4 +1,4 @@
-import { defaults, languageCode, own, promptDefaults } from '../shared/settings.js';
+import { defaults, languageCode, promptDefaults } from '../shared/settings.js';
 import { ext, reply, request, requestParagraphs } from '../shared/webext.js';
 import { connectCaptions } from './captions.js';
 import { overlay } from './overlay.js';
@@ -10,7 +10,11 @@ const ownedNodes = '[data-obsidian-loading],[data-obsidian-translation],[data-ob
 const peripheral = 'nav,aside,footer,[role="navigation"],[role="complementary"],[role="banner"]';
 const primary = 'main,article,[role="main"]';
 const tocHeading = '.vector-toc-text > span:not(.vector-toc-numb), .toctext';
+const embedded = !DEMO && window.top !== window;
 let settings = defaults;
+let exportingCaptions = false;
+let include = '';
+let exclude = '';
 let running = false;
 let autoSession = false;
 let detectedLanguage = '';
@@ -39,7 +43,9 @@ const urgent = new Set();
 const changes = new Set();
 const spaceKeys = new WeakMap();
 const ui = overlay((action, value) => panelAction(action, value).catch(showError));
-const captions = connectCaptions(text => translateOne(text, settings.target, { kind: 'subtitle' }), ui);
+const captions = connectCaptions(texts => request('translate', {
+  texts, target: settings.target, revision: settings.revision, context: context({ kind: 'subtitle' }),
+}), ui);
 const near = new IntersectionObserver(entries => {
   for (const entry of entries) {
     if (!queue.has(entry.target)) continue;
@@ -51,7 +57,7 @@ const near = new IntersectionObserver(entries => {
 }, { rootMargin: '280px 0px' });
 
 function siteRule() {
-  return own(settings.sites, location.hostname) ? settings.sites[location.hostname] : '';
+  return settings.frameBlocked ? 'never' : settings.sitePolicy || '';
 }
 
 function sourceLanguage() {
@@ -59,7 +65,17 @@ function sourceLanguage() {
 }
 
 function autoRule() {
-  return siteRule() || settings.languageRules[sourceLanguage()] || '';
+  const rule = siteRule();
+  return rule === 'manual' ? '' : rule || settings.languageRules[sourceLanguage()] || '';
+}
+
+function validSelector(selector) {
+  try {
+    if (selector) document.querySelector(selector);
+    return selector || '';
+  } catch {
+    return '';
+  }
 }
 
 async function detectLanguage(preferences) {
@@ -85,8 +101,9 @@ function context(extra) {
 function state() {
   return { running, scope, view, note, translated, failures, paused, canRestore: running || !!rows.size,
     floatingHidden: settings.hiddenFloatingSites.includes(location.hostname),
-    floating: ready && settings.floating && !settings.hiddenFloatingSites.includes(location.hostname) && siteRule() !== 'never',
-    hostname: location.hostname, site: siteRule() };
+    floating: ready && !embedded && settings.floating && !settings.hiddenFloatingSites.includes(location.hostname) && siteRule() !== 'never',
+    hostname: location.hostname, url: location.href, site: siteRule() === 'manual' ? '' : siteRule(),
+    video: !!document.querySelector('video'), exportingCaptions };
 }
 
 function status(message) {
@@ -172,12 +189,14 @@ function translatedContents(output, text, links) {
 
 function inScope(el) {
   if (scope === 'whole') return true;
+  if (include) return !!el.closest(include);
   if (el.closest(peripheral)) return false;
   return !hasPrimary || !!el.closest(primary);
 }
 
 function qualifies(el, force = false) {
   if (!el.isConnected || el.closest(ignored) || el.closest('[role="dialog"][aria-modal="true"]')) return false;
+  if (exclude && (el.closest(exclude) || el.querySelector(exclude))) return false;
   if (!force && !inScope(el)) return false;
   if (el.closest('.vector-toc')) {
     return el.matches(tocHeading + ', .ext-discussiontools-init-sidebar-meta') ||
@@ -309,7 +328,7 @@ function add(el, force = false) {
 
 function scan(root) {
   if (!(root instanceof Element) || !root.isConnected || root.closest(ignored)) return;
-  const selector = scope === 'whole' ? block : reading;
+  const selector = scope === 'whole' || include ? block : reading;
   const nearby = root.closest(selector);
   if (nearby) add(nearby);
   for (const el of root.querySelectorAll(selector)) add(el);
@@ -344,13 +363,20 @@ function start(nextScope, automatic = false) {
   scan(document.body);
   schedulePump(0);
   status();
+  announceFrames();
 }
 
 function stop() {
+  const wasRunning = running;
   running = false;
   autoSession = false;
   reset();
   status();
+  if (wasRunning) announceFrames();
+}
+
+function announceFrames() {
+  if (!embedded && !DEMO && settings.translateFrames) request('sync-frames').catch(() => {});
 }
 
 function pumpCapacity() {
@@ -509,6 +535,27 @@ async function translateInput(selected) {
 }
 
 async function handle(action, message = {}) {
+  if (embedded && (!ready || siteRule() === 'never')) return state();
+  if (action === 'export-captions') {
+    if (!settings.configured || siteRule() === 'never') throw new Error('请先配置当前页面使用的翻译模型。');
+    if (exportingCaptions) return state();
+    exportingCaptions = true;
+    status();
+    try {
+      const exported = await captions.exportSrt((done, total) => status('正在导出字幕 · ' + done + ' / ' + total));
+      const link = document.createElement('a');
+      const url = URL.createObjectURL(new Blob([exported.text], { type: 'application/x-subrip;charset=utf-8' }));
+      link.href = url;
+      link.download = (document.title.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim().slice(0, 100) || 'video') +
+        '.' + settings.target + (exported.full ? '' : '.collected') + '.srt';
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      ui.hint('已导出 ' + exported.count + ' 条' + (exported.full ? '字幕' : '播放期间收集的字幕'));
+    } finally {
+      exportingCaptions = false;
+      status();
+    }
+  }
   if (action === 'options') return request('options');
   if (action === 'refresh') {
     await sync();
@@ -528,6 +575,7 @@ async function handle(action, message = {}) {
       scan(document.body);
       schedulePump(0);
       status();
+      announceFrames();
     }
   }
   if (action === 'reading') start('reading');
@@ -554,7 +602,7 @@ async function handle(action, message = {}) {
 }
 
 async function panelAction(action, value) {
-  if (['models', 'floating', 'text', 'files', 'advanced'].includes(action)) {
+  if (['models', 'floating', 'text', 'files', 'advanced', 'advanced/rules'].includes(action)) {
     return request('options', { section: action });
   }
   if (['translate-page', 'toggle'].includes(action) && !settings.configured) {
@@ -591,9 +639,12 @@ async function sync(navigated = false) {
   const previousLanguage = sourceLanguage();
   detectedLanguage = nextLanguage;
   settings = next;
+  include = validSelector(settings.siteInclude);
+  exclude = validSelector(settings.siteExclude);
   ready = true;
   const restart = previous.revision !== settings.revision || previous.target !== settings.target ||
     previousLanguage !== sourceLanguage() || previous.scope !== settings.scope ||
+    previous.siteInclude !== settings.siteInclude || previous.siteExclude !== settings.siteExclude ||
     previous.maxLength !== settings.maxLength || previous.glossary !== settings.glossary ||
     Object.keys(promptDefaults).some(key => previous[key] !== settings[key]);
   if (previous.view !== settings.view || previous.order !== settings.order || previous.style !== settings.style) {
@@ -607,13 +658,13 @@ async function sync(navigated = false) {
     nextDispatch = 0;
     schedulePump(0);
   }
-  if (restart) captions(false);
-  captions(!!settings.configured && settings.captions && siteRule() !== 'never');
-  if (siteRule() === 'never' || !settings.configured || (autoSession && autoRule() === 'never')) {
+  if (restart || navigated) captions.setEnabled(false);
+  captions.setEnabled(!!settings.configured && settings.captions && siteRule() !== 'never');
+  if (siteRule() === 'never' || !settings.configured || (autoSession && autoRule() !== 'always')) {
     stop();
   } else if (running && (restart || navigated)) {
     start(previous.scope !== settings.scope ? settings.scope : scope, autoSession);
-  } else if (!running && (navigated || previousRule !== 'always' || !previous.configured) && autoRule() === 'always') {
+  } else if (!embedded && !running && (navigated || previousRule !== 'always' || !previous.configured) && autoRule() === 'always') {
     start(settings.scope, true);
   } else if (restart && rows.size) {
     stop();
@@ -621,22 +672,46 @@ async function sync(navigated = false) {
     if (!running) scope = settings.scope;
     status();
   }
+  if (embedded && settings.configured && siteRule() !== 'never') {
+    const parent = await request('frame-state').catch(() => null);
+    if (read !== settingsRead || !parent) return;
+    if (parent.running && (!running || paused || scope !== parent.scope)) start(parent.scope);
+    else if (!parent.running && running) stop();
+  } else if (running && !previous.translateFrames && settings.translateFrames) {
+    announceFrames();
+  }
 }
 
 ext.runtime.onMessage.addListener((message, sender, respond) => {
-  if (!['page-state', 'page-action'].includes(message?.type)) return false;
-  return reply(message => message.type === 'page-state' ? state() : handle(message.action, message))(message, sender, respond);
+  if (message?.type === 'sync-frame' && embedded) {
+    return reply(async () => {
+      await sync();
+      return state();
+    })(message, sender, respond);
+  }
+  if (!['page-state', 'page-action', 'page-setting'].includes(message?.type)) return false;
+  return reply(message => {
+    if (message.type === 'page-state') return state();
+    if (message.type === 'page-setting') return panelAction(message.action, message.value).then(state);
+    return handle(message.action, message);
+  })(message, sender, respond);
 });
 ext.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.settings) sync().catch(showError);
 });
 
-const watcher = new MutationObserver(records => {
+function checkNavigation() {
   const url = location.pathname + location.search;
   if (lastUrl !== url) {
     lastUrl = url;
     sync(true).catch(showError);
   }
+}
+window.addEventListener('popstate', checkNavigation);
+window.navigation?.addEventListener('currententrychange', checkNavigation);
+
+const watcher = new MutationObserver(records => {
+  checkNavigation();
   if (!running) return;
   for (const { target, addedNodes, removedNodes } of records) {
     const element = target instanceof Element ? target : target.parentElement;
@@ -692,7 +767,7 @@ document.addEventListener('keydown', event => {
     ui.hideSelection();
   }
   const field = editable(document.activeElement);
-  if (field && settings.inputSpaces && settings.configured && !event.isComposing && !event.repeat) {
+  if (field && settings.inputSpaces && settings.configured && siteRule() !== 'never' && !event.isComposing && !event.repeat) {
     const previous = spaceKeys.get(field);
     if (event.key !== ' ' || event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) {
       spaceKeys.delete(field);

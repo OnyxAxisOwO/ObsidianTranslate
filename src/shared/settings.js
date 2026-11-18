@@ -1,3 +1,5 @@
+import { matchingSiteProfiles, pageAddress, parseSitePattern } from './site-rules.js';
+
 export const promptDefaults = {
   systemPrompt: 'You are a professional translator. Write fluent, faithful translations in {{to}}.',
   translationPrompt: 'Preserve meaning, tone, terminology, names, and formatting. Leave text that is already in the target language as it is.',
@@ -54,6 +56,8 @@ export const defaults = {
   captions: false,
   cache: true,
   sites: {},
+  siteProfiles: [],
+  translateFrames: false,
   languageRules: {},
 };
 
@@ -61,6 +65,9 @@ export const protocols = {
   openai: { name: 'OpenAI 兼容', url: 'https://api.openai.com/v1', route: '/chat/completions' },
   responses: { name: 'OpenAI Responses', url: 'https://api.openai.com/v1', route: '/responses' },
   anthropic: { name: 'Anthropic Messages', url: 'https://api.anthropic.com/v1', route: '/messages' },
+  deepl: { name: 'DeepL', url: 'https://api-free.deepl.com/v2', route: '/translate', machine: true, key: true },
+  google: { name: 'Google Cloud Translation', url: 'https://translation.googleapis.com/language/translate/v2', route: '', machine: true, key: true },
+  libre: { name: 'LibreTranslate', url: 'http://localhost:5000', route: '/translate', machine: true },
 };
 
 export const languages = {
@@ -111,7 +118,8 @@ export function languageCode(value) {
 }
 
 export function needsKey(provider) {
-  return ['api.openai.com', 'api.anthropic.com'].includes(new URL(provider.baseUrl).hostname) && !provider.apiKey;
+  return !provider.apiKey && (protocols[provider.protocol].key ||
+    ['api.openai.com', 'api.anthropic.com'].includes(new URL(provider.baseUrl).hostname));
 }
 
 export function activeModel(settings) {
@@ -127,11 +135,31 @@ export function modelRevision(settings) {
   return active ? JSON.stringify([active.provider.id, active.provider.updated, active.model.id, active.model.parameters]) : '';
 }
 
-export function pageSettings({ providers, sites, hiddenFloatingSites, ...settings }, hostname) {
+export const profiledPreferences = ['source', 'target', 'activeModel', 'scope', 'view', 'captions'];
+
+export function resolvePage(settings, value) {
+  const url = pageAddress(value);
+  const profiles = matchingSiteProfiles(settings.siteProfiles, url);
+  const overrides = Object.assign({}, ...profiles.map(profile => profile.overrides));
+  const policy = overrides.policy ?? (url && own(settings.sites, url.hostname) ? settings.sites[url.hostname] : '');
+  return { url, profiles, policy, overrides };
+}
+
+export function effectiveSettings(settings, page) {
+  return { ...settings, ...Object.fromEntries(profiledPreferences.filter(key => own(page.overrides, key))
+    .map(key => [key, page.overrides[key]])) };
+}
+
+export function pageSettings(allSettings, value) {
+  const page = resolvePage(allSettings, value);
+  const { providers, sites, siteProfiles, hiddenFloatingSites, ...settings } = effectiveSettings(allSettings, page);
+  const hostname = page.url?.hostname;
   const active = activeModel({ providers, activeModel: settings.activeModel });
   return {
     ...settings,
-    sites: own(sites, hostname) ? { [hostname]: sites[hostname] } : {},
+    sitePolicy: page.policy,
+    siteInclude: page.overrides.include || '',
+    siteExclude: page.overrides.exclude || '',
     hiddenFloatingSites: hiddenFloatingSites.includes(hostname) ? [hostname] : [],
     models: providers.flatMap(provider => provider.models.map(model => ({
       key: modelKey(provider, model),
@@ -144,13 +172,52 @@ export function pageSettings({ providers, sites, hiddenFloatingSites, ...setting
   };
 }
 
-export function normalizeUrl(value) {
+export function normalizeSiteProfile(input, settings) {
+  const { pattern } = parseSitePattern(input?.pattern);
+  const values = input.overrides || {};
+  const overrides = {};
+  if (['always', 'never', 'manual'].includes(values.policy)) overrides.policy = values.policy;
+  if (values.source === 'auto' || own(languages, values.source)) overrides.source = values.source;
+  if (own(languages, values.target)) overrides.target = values.target;
+  if (['reading', 'whole'].includes(values.scope)) overrides.scope = values.scope;
+  if (['translation', 'bilingual'].includes(values.view)) overrides.view = values.view;
+  if (typeof values.captions === 'boolean') overrides.captions = values.captions;
+  if (values.activeModel && activeModel({ ...settings, activeModel: values.activeModel })) overrides.activeModel = values.activeModel;
+  for (const selector of ['include', 'exclude']) {
+    if (typeof values[selector] === 'string') overrides[selector] = text(values[selector], 500);
+  }
+  return { pattern, overrides };
+}
+
+export function applyPagePreferences(settings, page, patch) {
+  for (const [key, value] of Object.entries(patch)) {
+    const profile = page?.profiles.findLast(item => own(item.overrides, key));
+    if (!profile) settings[key] = value;
+    else profile.overrides[key] = value;
+  }
+  return settings;
+}
+
+export function restoreSettings(backup) {
+  const raw = backup?.settings;
+  if (backup?.format !== 'obsidian-translate-settings' || backup.version !== 1 || !raw || !Array.isArray(raw.providers)) {
+    throw new Error('请选择 Obsidian Translate 导出的设置文件。');
+  }
+  const restored = normalizeSettings(raw);
+  if (restored.providers.length !== raw.providers.length ||
+      (raw.siteProfiles && restored.siteProfiles.length !== raw.siteProfiles.length)) {
+    throw new Error('备份中包含无效的服务商或网站规则。');
+  }
+  return restored;
+}
+
+export function normalizeUrl(value, protocol = 'openai') {
   const url = new URL(value);
   if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.hash) {
     throw new Error('请输入有效的 HTTP 或 HTTPS 服务地址。');
   }
   const pathname = url.pathname.replace(/\/+$/, '');
-  url.pathname = pathname || '/v1';
+  url.pathname = pathname || new URL(protocols[protocol].url).pathname;
   return url.toString();
 }
 
@@ -190,7 +257,7 @@ export function normalizeProvider(item) {
   }
   let baseUrl;
   try {
-    baseUrl = normalizeUrl(text(item.baseUrl, 2000));
+    baseUrl = normalizeUrl(text(item.baseUrl, 2000), item.protocol);
   } catch {
     throw new Error('请输入有效的 Base URL，例如 https://api.openai.com/v1。');
   }
@@ -202,7 +269,9 @@ export function normalizeProvider(item) {
     baseUrl,
     apiKey: text(item.apiKey, 4000),
     rps: Number.isFinite(rps) && rps > 0 ? rps : openAI.rps,
-    models: [...models.values()],
+    models: protocols[item.protocol].machine
+      ? [{ id: 'translate', name: protocols[item.protocol].name, parameters: {} }]
+      : [...models.values()],
     updated: Number(item.updated) || Date.now(),
   };
 }
@@ -244,7 +313,7 @@ export function normalizeSettings(input = {}) {
   settings.hiddenFloatingSites = [...new Set(Array.isArray(input.hiddenFloatingSites)
     ? input.hiddenFloatingSites.filter(host => typeof host === 'string' && /^[-\w.:[\]]{1,255}$/.test(host)).slice(0, 300)
     : [])];
-  for (const key of ['floating', 'selection', 'hover', 'inputSpaces', 'captions', 'cache']) {
+  for (const key of ['floating', 'selection', 'hover', 'inputSpaces', 'captions', 'cache', 'translateFrames']) {
     if (typeof input[key] === 'boolean') settings[key] = input[key];
   }
   settings.sites = Object.fromEntries(Object.entries(input.sites || {}).filter(([host, rule]) =>
@@ -259,5 +328,15 @@ export function normalizeSettings(input = {}) {
       settings.providers.find(item => item.models.length);
     settings.activeModel = provider ? modelKey(provider, provider.models[0]) : '';
   }
+  const profiles = new Map();
+  for (const profile of Array.isArray(input.siteProfiles) ? input.siteProfiles.slice(0, 300) : []) {
+    try {
+      const normalized = normalizeSiteProfile(profile, settings);
+      profiles.set(normalized.pattern, normalized);
+    } catch {
+      // Ignore legacy or invalid entries when reading stored settings.
+    }
+  }
+  settings.siteProfiles = [...profiles.values()];
   return settings;
 }

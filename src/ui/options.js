@@ -3,6 +3,8 @@ import { icon } from '../shared/icons.js';
 import { api } from './api.js';
 import { escape, iconButton, languageOptions, option } from './helpers.js';
 import { parseFile } from './files.js';
+import { fetchFile, readDocument } from './documents.js';
+import { ocrLanguages, readImage } from './ocr.js';
 
 const container = document.querySelector('#settings');
 const navigation = document.querySelector('#navigation');
@@ -20,6 +22,7 @@ const advancedSections = {
   prompts: ['AI 提示词', 'sliders', '调整系统指令、用户输入、字幕和术语。'],
   rules: ['网站与语言', 'globe', '选择总是翻译的网站和语言。'],
   cache: ['本地缓存', 'disk', '查看或清除已存的译文。'],
+  backup: ['配置导入与导出', 'disk', '迁移连接、提示词、网站规则和界面偏好。'],
 };
 
 let settings;
@@ -53,11 +56,12 @@ function mark(provider) {
 
 function renderModels() {
   const provider = settings.providers.find(item => item.id === selected) || settings.providers[0];
+  const machine = provider && protocols[provider.protocol].machine;
   selected = provider?.id;
   const head = heading('服务商与模型', '在服务商中配置连接，同一服务商下的模型共用地址和密钥。',
     button('new-provider', '添加服务商', 'plus', 'primary'));
   if (!provider) return head + `<div class="empty">${icon('stack')}<h2>添加你的第一个服务商</h2>
-    <p>可接入 OpenAI 兼容、OpenAI Responses 或 Anthropic Messages 接口。</p>
+    <p>可接入大语言模型、DeepL、Google Cloud Translation 或自托管 LibreTranslate。</p>
     ${button('new-provider', '配置 API', 'arrow')}</div>`;
   return head + `<div class="provider-workspace">
     <div class="provider-list">
@@ -73,7 +77,9 @@ function renderModels() {
         <div><dt>请求速率</dt><dd>${provider.rps} 次 / 秒</dd></div>
         <div><dt>API 密钥</dt><dd>${provider.apiKey ? '已保存' : '未填写'}</dd></div>
       </dl>
-      <div class="group-head"><h3>翻译模型</h3><div class="actions">${button('discover', '从 API 导入', 'search', 'ghost')}${button('new-model', '添加模型', 'plus')}</div></div>
+      <div class="group-head"><h3>${machine ? '翻译引擎' : '翻译模型'}</h3>
+        ${machine ? '<p class="help">使用原生翻译接口，AI 提示词和模型参数不生效。</p>'
+          : '<div class="actions">' + button('discover', '从 API 导入', 'search', 'ghost') + button('new-model', '添加模型', 'plus') + '</div>'}</div>
       <div class="model-list">${provider.models.map((model, index) => `<div class="model-row">
         <span class="model-mark">${icon('cube')}</span><div class="model-copy"><strong class="shorten">${escape(model.name)}</strong>
         <small class="mono shorten" title="${escape(model.id)}">${escape(model.id)}</small></div>
@@ -81,7 +87,7 @@ function renderModels() {
           ? `<span class="current-model">${icon('check')} 默认</span>`
           : `<button type="button" class="button ghost" data-action="default-model" data-index="${index}">设为默认</button>`}
         ${iconButton('test', '试译', 'play', index)}
-        ${iconButton('edit-model', '编辑模型', 'sliders', index)}
+        ${machine ? '' : iconButton('edit-model', '编辑模型', 'sliders', index)}
       </div>`).join('') || '<p class="empty">从 API 导入模型，或手动填写模型 ID。</p>'}</div>
     </div>
   </div>`;
@@ -126,6 +132,7 @@ function renderReading() {
       ${toggle('selection', '划词翻译', '选中文字后显示翻译按钮。')}
       ${toggle('hover', '悬停翻译', '鼠标指向文段时按 Shift 翻译。')}
       ${toggle('captions', '双语字幕', '在 YouTube 和兼容播放器打开原字幕后显示译文。')}
+      ${toggle('translateFrames', '翻译嵌入框架', '让嵌入网页和播放器使用主页面设置。需有权访问框架所在网站。')}
     `)}
     ${group('输入框', `
       ${select('inputTarget', '输入框目标语言', '在输入框中按 Option / Alt + Shift + I 翻译。', languageOptions(settings.inputTarget))}
@@ -183,7 +190,13 @@ function renderPrompts() {
 function renderRules() {
   const sites = Object.entries(settings.sites);
   const languagesWithRules = Object.entries(settings.languageRules);
-  return heading('网站与语言', '设定哪些网站或语言会自动翻译。网站规则优先。') + `<div class="preferences">
+  return heading('网站与语言', '按网站、网址路径或源语言决定翻译方式。') + `<div class="preferences">
+    ${group('网址规则', `
+      ${settings.siteProfiles.map(({ pattern, overrides }, index) => row(escape(pattern), profileSummary(overrides),
+        '<div class="actions">' + iconButton('edit-profile', '编辑网址规则', 'sliders', index) +
+        iconButton('delete-profile', '移除网址规则', 'trash', index) + '</div>')).join('')}
+      ${row('自定义规则', '更具体的网址继承并覆盖域名规则中的对应项目。', button('new-profile', '添加网址规则', 'plus'))}
+    `)}
     ${group('网站', `
       ${sites.map(([host, rule], index) => row(escape(host), rule === 'always' ? '总是翻译' : '停用翻译',
         iconButton('delete-site', '移除网站规则', 'trash', index))).join('')}
@@ -193,6 +206,27 @@ function renderRules() {
       ${languagesWithRules.map(([language, rule], index) => row(languages[language][0],
         rule === 'always' ? '总是自动翻译' : '仅手动翻译', iconButton('delete-language', '移除语言规则', 'trash', index))).join('')}
       ${row('语言规则', '根据网页源语言决定是否自动翻译。', button('new-language', '添加语言', 'plus'))}
+    `)}
+  </div>`;
+}
+
+function profileSummary(overrides) {
+  const model = settings.providers.flatMap(provider => provider.models.map(item =>
+    [modelKey(provider, item), provider.name + ' / ' + item.name])).find(([key]) => key === overrides.activeModel)?.[1];
+  return [
+    { always: '总是翻译', never: '停用翻译', manual: '仅手动翻译' }[overrides.policy],
+    overrides.target && '目标 ' + languages[overrides.target][0],
+    model,
+    overrides.include && '指定正文',
+    overrides.exclude && '排除指定元素',
+  ].filter(Boolean).map(escape).join(' · ');
+}
+
+function renderBackup() {
+  return heading('配置导入与导出', '在浏览器或设备之间迁移扩展设置。') + `<div class="preferences">
+    ${group('配置文件', `
+      ${row('导出配置', '包含服务商地址、API 密钥、模型、网站规则和偏好。', button('export-settings', '下载 JSON', 'file'))}
+      ${row('导入配置', '从 JSON 备份恢复设置，并替换当前配置。', button('import-settings', '选择备份', 'back'))}
     `)}
   </div>`;
 }
@@ -214,20 +248,37 @@ function activeLabel() {
 
 function renderFiles() {
   const selection = activeModel(settings);
-  return heading('文件翻译', '添加文件，下载译文或双语版本。') +
+  const query = new URLSearchParams(location.search);
+  const presetUrl = query.get('pdf') || query.get('image') || '';
+  const mode = query.has('pdf') ? 'url' : query.has('image') ? 'image' : 'file';
+  const online = mode !== 'file';
+  return heading('文件翻译', '翻译文档和字幕，下载译文或双语版本。') +
     `<form class="preferences" data-form="file">
-      <label class="file-picker"><input name="file" type="file" aria-label="选择文件" accept=".txt,.md,.srt,.vtt" required>
+      ${group('来源', row('导入方式', '', '<select name="fileSource" aria-label="导入方式">' +
+        option('file', '本地文件', mode) + option('url', '在线 PDF', mode) + option('image', '在线图片', mode) + '</select>'))}
+      <label class="file-picker" ${online ? 'hidden' : ''}>
+        <input name="file" type="file" aria-label="选择文件" accept=".txt,.md,.srt,.vtt,.ass,.pdf,.epub,.docx,.png,.jpg,.jpeg,.webp" ${online ? 'disabled' : 'required'}>
         <span class="file-icon">${icon('file')}</span><strong id="file-name">选择或拖入文件</strong>
-        <small>TXT、Markdown、SRT 和 WebVTT · 最大 1 MB</small>
+        <small>PDF、EPUB、DOCX、文本、字幕、PNG、JPEG 和 WebP</small>
       </label>
+      <label class="online-file" ${online ? '' : 'hidden'}><span>${mode === 'image' ? '图片网址' : 'PDF 网址'}</span>
+        <input name="fileUrl" type="url" placeholder="https://example.com/file" value="${escape(presetUrl)}" ${online ? 'required' : 'disabled'}>
+      </label>
+      <p class="help">文档和图片最大 25 MB，文本和字幕最大 1 MB。PDF 按页导出 HTML，可在预览中打印或存为 PDF。</p>
       ${group('翻译选项', `
         ${row('翻译模型', '', activeLabel())}
+        ${row('源语言', '', '<select name="source" aria-label="源语言">' +
+          option('auto', '自动识别', settings.source) + languageOptions(settings.source) + '</select>')}
+        ${row('图片与扫描页识别', '英文数据已随扩展安装，其他识别语言首次使用时下载。', '<select name="ocrLanguage" aria-label="识别语言">' +
+          option('', '关闭扫描页识别') + Object.entries(ocrLanguages).map(([code, label]) => option(code, label, 'eng')).join('') + '</select>')}
         ${select('fileTarget', '目标语言', '', languageOptions(settings.target))}
         ${row('输出内容', '', `<select aria-label="输出内容" name="output">${showOptions('view', ['translation', '仅译文'], ['bilingual', '双语对照'])}</select>`)}
       `)}
       <div class="actions end"><button type="button" class="button ghost" data-action="stop-file" hidden>停止</button>
         <button class="button primary" ${selection && !needsKey(selection.provider) ? '' : 'disabled'}>${icon('translate')} 翻译文件</button></div>
-      <div class="file-result"><p class="form-status" role="status"></p><a class="button" id="download" hidden>下载译文</a></div>
+      <div class="file-result"><p class="form-status" role="status"></p>
+        <a class="button" id="preview-file" target="_blank" rel="noopener" hidden>预览 / 打印</a>
+        <a class="button" id="download" hidden>下载译文</a></div>
     </form>`;
 }
 
@@ -255,7 +306,7 @@ function renderAdvanced() {
 }
 
 const screens = { reading: renderReading, floating: renderFloating, text: renderText, files: renderFiles, advanced: renderAdvanced,
-  models: renderModels, prompts: renderPrompts, rules: renderRules, cache: renderCache };
+  models: renderModels, prompts: renderPrompts, rules: renderRules, cache: renderCache, backup: renderBackup };
 
 function draw() {
   const next = location.hash.slice(1).replace(/^advanced\//, '');
@@ -290,20 +341,36 @@ function modal(title, html) {
 function providerForm(provider) {
   const item = provider || { name: '', protocol: 'openai', baseUrl: protocols.openai.url, rps: 2, models: [] };
   modal(provider ? '编辑服务商' : '添加服务商', `<form data-form="provider" class="editor-fields">
-    <label>名称<input name="name" required maxlength="80" value="${escape(item.name)}" placeholder="例如 OpenAI 或本地模型" autofocus></label>
     <label>API 格式<select name="protocol">${Object.entries(protocols).map(([key, value]) => option(key, value.name, item.protocol)).join('')}</select></label>
+    <label>名称<input name="name" required maxlength="80" value="${escape(item.name)}" placeholder="例如 OpenAI 或本地模型"></label>
     <label>Base URL<input name="baseUrl" type="url" required maxlength="2000" value="${escape(item.baseUrl)}"></label>
     <label>API Key<input name="apiKey" type="password" maxlength="4000" autocomplete="off" value="${DEMO ? '' : escape(item.apiKey)}" placeholder="无鉴权的本地服务可留空"></label>
     <label>每秒最大请求数<input name="rps" type="number" required min="0" step="any" value="${item.rps}"></label>
+    <p class="help" data-provider-help></p>
     <div class="dialog-actions">${provider ? button('delete-provider', '删除服务商', 'trash', 'danger ghost') : ''}
       ${button('close', '取消', '', 'ghost')}<button class="button primary">保存</button></div>
     <p class="form-status" role="status"></p></form>`);
   const form = editor.querySelector('form');
   form.dataset.id = provider?.id || '';
+  function describe() {
+    const protocol = form.elements.protocol.value;
+    form.elements.apiKey.required = !!protocols[protocol].key;
+    form.querySelector('[data-provider-help]').textContent = {
+      deepl: '默认使用 DeepL API Free；若使用 API Pro，将地址改为 https://api.deepl.com/v2。',
+      google: '填写已启用 Cloud Translation API 的 Google Cloud 项目的 API Key。',
+      libre: '默认连接本机的 LibreTranslate。服务启用鉴权时填写该服务的 API Key。',
+    }[protocol] || '';
+  }
+  describe();
   form.elements.protocol.addEventListener('change', () => {
-    if (Object.values(protocols).some(value => form.elements.baseUrl.value === value.url)) {
-      form.elements.baseUrl.value = protocols[form.elements.protocol.value].url;
+    const protocol = protocols[form.elements.protocol.value];
+    if (!form.elements.name.value || Object.values(protocols).some(value => value.name === form.elements.name.value)) {
+      form.elements.name.value = protocol.name;
     }
+    if (Object.values(protocols).some(value => form.elements.baseUrl.value === value.url)) {
+      form.elements.baseUrl.value = protocol.url;
+    }
+    describe();
   });
 }
 
@@ -331,10 +398,55 @@ function siteForm(language = false) {
     <p class="form-status" role="status"></p></form>`);
 }
 
+function profileForm(index) {
+  const current = settings.siteProfiles[index];
+  const profile = current?.overrides || {};
+  const inherited = '<option value="">继承</option>';
+  const choose = (key, entries) => inherited + entries.map(([value, label]) => option(value, label, String(profile[key]))).join('');
+  const models = settings.providers.flatMap(provider => provider.models.map(model =>
+    [modelKey(provider, model), provider.name + ' / ' + model.name]));
+  modal(current ? '编辑网址规则' : '添加网址规则', `<form data-form="profile" class="editor-fields">
+    <label>域名或网址路径<input name="pattern" required maxlength="600" value="${escape(current?.pattern)}"
+      placeholder="*.example.com/docs/*" autofocus></label>
+    <p class="help">可填写完整页面路径。子域名开头和路径末尾可使用 *。</p>
+    <label>自动翻译<select name="policy">${choose('policy', [['always', '总是翻译'], ['manual', '仅手动翻译'], ['never', '停用翻译']])}</select></label>
+    <label>翻译引擎<select name="activeModel">${choose('activeModel', models)}</select></label>
+    <label>源语言<select name="source">${inherited}${option('auto', '自动识别', profile.source)}${languageOptions(profile.source)}</select></label>
+    <label>目标语言<select name="target">${inherited}${languageOptions(profile.target)}</select></label>
+    <label>范围<select name="scope">${choose('scope', [['reading', '正文'], ['whole', '整页']])}</select></label>
+    <label>显示<select name="view">${choose('view', [['translation', '仅译文'], ['bilingual', '双语对照']])}</select></label>
+    <label>双语字幕<select name="captions">${choose('captions', [['true', '开启'], ['false', '关闭']])}</select></label>
+    <label>正文 CSS 选择器<input name="include" maxlength="500" value="${escape(profile.include)}" placeholder="例如 main .article"></label>
+    <label>排除 CSS 选择器<input name="exclude" maxlength="500" value="${escape(profile.exclude)}" placeholder="例如 .advertisement, .references"></label>
+    <div class="dialog-actions">${button('close', '取消', '', 'ghost')}<button class="button primary">保存</button></div>
+    <p class="form-status" role="status"></p></form>`);
+  editor.querySelector('form').dataset.previous = current?.pattern || '';
+}
+
+function exportSettings() {
+  const backup = { format: 'obsidian-translate-settings', version: 1, settings };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'obsidian-translate-settings.json';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
 function wireFilePicker() {
-  const picker = container.querySelector('.file-picker');
+  const form = container.querySelector('[data-form="file"]');
+  const picker = form.querySelector('.file-picker');
   const input = picker.querySelector('input');
   const name = picker.querySelector('#file-name');
+  const online = form.querySelector('.online-file');
+  const url = online.querySelector('input');
+  form.elements.fileSource.addEventListener('change', () => {
+    const source = form.elements.fileSource.value;
+    const isOnline = source !== 'file';
+    picker.hidden = input.disabled = url.required = isOnline;
+    online.hidden = url.disabled = input.required = !isOnline;
+    online.querySelector('span').textContent = source === 'image' ? '图片网址' : 'PDF 网址';
+  });
   input.addEventListener('change', () => { name.textContent = input.files[0]?.name || '选择或拖入文件'; });
   picker.addEventListener('dragover', event => {
     if (!event.dataTransfer.types.includes('Files')) return;
@@ -409,6 +521,17 @@ async function action(name, index, control) {
     case 'edit-model': return modelForm(index);
     case 'discover': return importModels(provider);
     case 'new-site': return siteForm();
+    case 'new-profile': return profileForm();
+    case 'edit-profile': return profileForm(index);
+    case 'delete-profile':
+      settings = await api('site-profile-delete', { pattern: settings.siteProfiles[index].pattern });
+      return draw();
+    case 'export-settings': return exportSettings();
+    case 'import-settings':
+      return modal('导入配置', `<form data-form="backup" class="editor-fields">
+        <label>备份文件<input type="file" name="file" accept=".json,application/json" required></label>
+        <div class="dialog-actions">${button('close', '取消', '', 'ghost')}<button class="button primary">替换当前配置</button></div>
+        <p class="form-status" role="status"></p></form>`);
     case 'new-floating-site':
       return modal('在网站隐藏悬浮窗', `<form data-form="floating-site" class="editor-fields">
         <label>域名或完整网址<input name="host" placeholder="example.com" required autofocus></label>
@@ -482,23 +605,46 @@ document.addEventListener('change', async event => {
   }
 });
 
-async function translateFile(form, file, bilingual) {
-  if (!file?.size || file.size > 1000000) throw new Error('请选择不超过 1 MB 的 UTF-8 文件。');
-  const extension = file.name.split('.').at(-1).toLowerCase();
-  if (!['txt', 'md', 'srt', 'vtt'].includes(extension)) throw new Error('请选择 TXT、Markdown、SRT 或 WebVTT 文件。');
-  const text = new TextDecoder('utf8', { fatal: true }).decode(await file.arrayBuffer());
-  const { parts, format } = parseFile(text, extension);
-  if (!parts.length) throw new Error('没有找到可翻译的文段。');
+async function translateFile(form, data) {
+  const file = data.get('file');
+  const source = data.get('fileSource');
+  const url = source === 'file' ? '' : data.get('fileUrl').trim();
+  const name = url ? (new URL(url).pathname.split('/').at(-1) || 'online') : file?.name || '';
+  const extension = source === 'url' ? 'pdf' : name.split('.').at(-1).toLowerCase();
+  const document = ['pdf', 'docx', 'epub'].includes(extension);
+  const image = source === 'image' || (source === 'file' && ['png', 'jpg', 'jpeg', 'webp'].includes(extension));
+  const rich = document || image;
+  const subtitles = ['srt', 'vtt', 'ass'].includes(extension);
+  const bilingual = data.get('output') === 'bilingual';
+  if (!rich && !subtitles && !['txt', 'md'].includes(extension)) throw new Error('请选择受支持的文档、字幕或图片。');
+  if (!url && (!file?.size || file.size > (rich ? 25_000_000 : 1_000_000))) {
+    throw new Error(rich ? '请选择不超过 25 MB 的文档或图片。' : '请选择不超过 1 MB 的 UTF-8 文件。');
+  }
+  const ocrLanguage = data.get('ocrLanguage');
+  if (image && !ocrLanguage) throw new Error('请为图片选择识别语言。');
   const target = form.querySelector('[data-pref="fileTarget"]').value;
   const stop = form.querySelector('[data-action="stop-file"]');
   const link = form.querySelector('#download');
+  const preview = form.querySelector('#preview-file');
   link.hidden = true;
+  preview.hidden = true;
   if (download) URL.revokeObjectURL(download);
   const controller = new AbortController();
   fileRun = controller;
   stop.hidden = false;
   const outputs = [];
   try {
+    formStatus(form, image ? '正在识别图片文字…' : '正在读取文件…');
+    const remoteImage = source === 'image' && await fetchFile(url, controller.signal);
+    if (remoteImage && remoteImage.type && !/^(?:image\/(?:png|jpeg|webp)|application\/octet-stream)$/.test(remoteImage.type)) {
+      throw new Error('请选择 PNG、JPEG 或 WebP 图片。');
+    }
+    const picture = remoteImage ? new File([remoteImage.bytes], name, { type: remoteImage.type }) : file;
+    const parsed = image ? await readImage(picture, ocrLanguage, controller.signal) :
+      document ? await readDocument({ file, url, extension, name, ocrLanguage }, controller.signal, text => formStatus(form, text)) :
+        parseFile(new TextDecoder('utf8', { fatal: true }).decode(await file.arrayBuffer()), extension);
+    const { parts, format } = parsed;
+    if (!parts.length) throw new Error('没有找到可翻译的文段。');
     for (let offset = 0; offset < parts.length;) {
       if (controller.signal.aborted) return formStatus(form, '已停止。');
       formStatus(form, `正在翻译 · ${offset} / ${parts.length} 段`);
@@ -512,7 +658,7 @@ async function translateFile(form, file, bilingual) {
         size += original.length;
         offset++;
       }
-      const context = ['srt', 'vtt'].includes(extension) ? { kind: 'subtitle' } : {};
+      const context = { kind: subtitles ? 'subtitle' : 'text', source: data.get('source'), title: name };
       const results = await api('translate', { texts, target, context });
       for (const result of results) {
         if (result.error) throw new Error(result.error);
@@ -520,11 +666,22 @@ async function translateFile(form, file, bilingual) {
       }
     }
     if (controller.signal.aborted) return formStatus(form, '已停止。');
-    download = URL.createObjectURL(new Blob([format(outputs, bilingual)], { type: 'text/plain;charset=utf-8' }));
+    const formatted = rich ? format(outputs, bilingual, target) :
+      { extension, blob: new Blob([format(outputs, bilingual)], { type: 'text/plain;charset=utf-8' }) };
+    download = URL.createObjectURL(formatted.blob);
     link.href = download;
-    link.download = file.name.replace(/\.[^.]+$/, `.${target}.${extension}`);
+    link.download = name.replace(/\.[^.]+$/, '') + '.' + target + '.' + formatted.extension;
     link.hidden = false;
-    formStatus(form, `翻译完成 · ${parts.length} 段`);
+    if (formatted.preview) {
+      preview.href = download;
+      preview.hidden = false;
+    }
+    formStatus(form, '翻译完成 · ' + parts.length + ' 段' +
+      (parsed.scannedPages ? ' · 识别 ' + parsed.scannedPages + ' 页' : '') +
+      (parsed.skippedPages ? ' · ' + parsed.skippedPages + ' 页无可提取文本' : ''));
+  } catch (error) {
+    if (!controller.signal.aborted) throw error;
+    formStatus(form, '已停止。');
   } finally {
     if (fileRun === controller) fileRun = null;
     stop.hidden = true;
@@ -544,7 +701,9 @@ document.addEventListener('submit', async event => {
     if (type === 'provider') {
       if (!(form.elements.rps.valueAsNumber > 0)) throw new Error('每秒最大请求数必须大于 0。');
       const prior = settings.providers.find(item => item.id === form.dataset.id);
-      await saveProvider({ ...prior, ...Object.fromEntries(data) });
+      const protocol = data.get('protocol');
+      const models = prior && !protocols[prior.protocol].machine ? prior.models : [];
+      await saveProvider({ ...prior, ...Object.fromEntries(data), models });
     } else if (type === 'model' || type === 'import') {
       const provider = settings.providers.find(item => item.id === selected);
       const models = [...provider.models];
@@ -574,6 +733,33 @@ document.addEventListener('submit', async event => {
         : await api('floating-site', { host: url.hostname, hidden: true });
       editor.close();
       draw();
+    } else if (type === 'profile') {
+      const { pattern, ...overrides } = Object.fromEntries([...data].filter(([, value]) => value.trim()));
+      for (const key of ['include', 'exclude']) {
+        try {
+          if (overrides[key]) document.querySelector(overrides[key]);
+        } catch {
+          throw new Error(key === 'include' ? '正文 CSS 选择器格式无效。' : '排除 CSS 选择器格式无效。');
+        }
+      }
+      if (overrides.captions) overrides.captions = overrides.captions === 'true';
+      if (!Object.keys(overrides).length) throw new Error('请设置至少一项规则。');
+      settings = await api('site-profile-save', { profile: { pattern, overrides }, previous: form.dataset.previous });
+      editor.close();
+      draw();
+    } else if (type === 'backup') {
+      const file = data.get('file');
+      if (!file?.size || file.size > 20_000_000) throw new Error('请选择不超过 20 MB 的设置备份。');
+      let backup;
+      try {
+        backup = JSON.parse(await file.text());
+      } catch {
+        throw new Error('设置备份必须是有效的 JSON 文件。');
+      }
+      settings = await api('settings-import', { backup });
+      editor.close();
+      draw();
+      notify('配置已导入');
     } else if (type === 'language') {
       settings = await api('language-rule', { language: data.get('language'), rule: data.get('rule') });
       editor.close();
@@ -583,7 +769,7 @@ document.addEventListener('submit', async event => {
       for (const key of Object.keys(promptDefaults)) form.elements[key].value = settings[key];
       notify('已保存 AI 提示词');
     } else if (type === 'file') {
-      await translateFile(form, data.get('file'), data.get('output') === 'bilingual');
+      await translateFile(form, data);
     } else if (type === 'text') {
       const text = data.get('text').trim();
       if (!text) throw new Error('请输入要翻译的文字。');

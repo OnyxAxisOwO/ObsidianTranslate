@@ -20,6 +20,15 @@ let page = null;
 let busy = false;
 let error = '';
 
+function onlinePdf() {
+  try {
+    const url = new URL(tab?.url);
+    return ['http:', 'https:'].includes(url.protocol) && /\.pdf$/i.test(url.pathname) ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
 async function pageRequest(type, payload = {}) {
   const response = await tabs.sendMessage(tab.id, { type, ...payload }, { frameId: 0 });
   if (!response?.ok) throw new Error(response?.error || '当前网页暂不可翻译。');
@@ -27,7 +36,7 @@ async function pageRequest(type, payload = {}) {
 }
 
 function draw() {
-  panel.update(pageSettings(settings, page?.hostname || ''), page, error);
+  panel.update(pageSettings(settings, page?.url || tab?.url || ''), page || (onlinePdf() ? { pdf: true } : null), error);
 }
 
 async function getPage() {
@@ -43,23 +52,21 @@ async function act(action, value) {
   busy = true;
   error = '';
   try {
-    if (['models', 'floating', 'text', 'files', 'advanced'].includes(action)) {
+    const pdfUrl = onlinePdf();
+    if (pdfUrl && ['translate-page', 'files'].includes(action)) {
+      await api('options', { section: 'files', pdfUrl });
+    } else if (['models', 'floating', 'text', 'files', 'advanced', 'advanced/rules'].includes(action)) {
       await api('options', { section: action });
-    } else if (action === 'translate-page' && !pageSettings(settings, '').configured) {
+    } else if (action === 'translate-page' && !pageSettings(settings, page?.url || tab?.url || '').configured) {
       await api('options', { section: 'models' });
-    } else if (['translate-page', 'original'].includes(action)) {
+    } else if (['translate-page', 'original', 'export-captions'].includes(action)) {
       page = await pageRequest('page-action', { action });
-    } else if (action === 'site') {
-      settings = await api('site-rule', { host: page?.hostname, rule: value });
-    } else if (action === 'toggle-floating-site') {
-      settings = await api('floating-site', { host: page?.hostname, hidden: !page?.floatingHidden });
-      page = await pageRequest('page-action', { action: 'refresh' });
-    } else if (action === 'hide-floating-all') {
-      settings = await api('preferences', { patch: { floating: false } });
-      if (page) page = await pageRequest('page-action', { action: 'refresh' });
+    } else if (page) {
+      page = await pageRequest('page-setting', { action, value });
+      settings = await api('settings');
     } else {
-      settings = await api('preferences', { patch: { [action]: action === 'captions' ? value === 'true' : value } });
-      if (page) page = await pageRequest('page-action', { action: 'refresh' });
+      const patch = action === 'hide-floating-all' ? { floating: false } : { [action]: action === 'captions' ? value === 'true' : value };
+      settings = await api('preferences', { patch });
     }
   } catch (problem) {
     error = problem.message;

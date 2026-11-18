@@ -1,14 +1,23 @@
 import { cache } from './cache.js';
 import { clearCache, discover, translate } from './translate.js';
-import { activeModel, languages, modelKey, modelRevision, needsKey, normalizeProvider, normalizeSettings, own, pageSettings, promptDefaults } from './shared/settings.js';
+import { activeModel, applyPagePreferences, effectiveSettings, languages, modelKey, modelRevision, needsKey,
+  normalizeProvider, normalizeSettings, normalizeSiteProfile, own, pageSettings, promptDefaults, restoreSettings, resolvePage } from './shared/settings.js';
 import { ext, reply } from './shared/webext.js';
+import { pageAddress } from './shared/site-rules.js';
 
 const uiProtocol = ext.runtime.getURL('/');
 const pagePrefs = ['source', 'target', 'activeModel', 'view', 'scope', 'captions', 'floating'];
 const prefs = [...pagePrefs, 'inputTarget', 'order', 'style', 'loadingStyle', 'loadingText', 'maxLength', 'batchSize',
-  'glossary', 'floatingSide', 'floatingPosition', 'floatingOpacity', 'selection', 'hover', 'inputSpaces', 'cache', ...Object.keys(promptDefaults)];
-const optionPages = ['models', 'reading', 'floating', 'text', 'files', 'advanced', 'advanced/models', 'advanced/prompts', 'advanced/rules', 'advanced/cache'];
+  'glossary', 'floatingSide', 'floatingPosition', 'floatingOpacity', 'selection', 'hover', 'inputSpaces', 'cache', 'translateFrames', ...Object.keys(promptDefaults)];
+const optionPages = ['models', 'reading', 'floating', 'text', 'files', 'advanced', 'advanced/models', 'advanced/prompts', 'advanced/rules', 'advanced/cache', 'advanced/backup'];
 let writes = Promise.resolve();
+
+function optionsUrl(section, { pdfUrl, imageUrl } = {}) {
+  const url = section === 'files' && pageAddress(imageUrl || pdfUrl || '');
+  const search = url && !url.username && !url.password
+    ? '?' + (imageUrl ? 'image' : 'pdf') + '=' + encodeURIComponent(url.href) : '';
+  return ext.runtime.getURL('options.html' + search + '#' + section);
+}
 
 async function load() {
   const stored = await ext.storage.local.get('settings');
@@ -37,12 +46,26 @@ function draftProvider(item, settings) {
 }
 
 async function handleMessage(message, sender, onResult) {
-  const page = sender.url?.startsWith(uiProtocol) ? null : sender.tab?.url || sender.url;
-  const ui = sender.url?.startsWith(uiProtocol);
+  const ui = sender.url?.startsWith(uiProtocol) === true;
+  const child = !ui && sender.frameId > 0;
+  const page = ui ? '' : sender.tab?.url || sender.url || '';
   const settings = await load();
-  const hostname = page ? new URL(page).hostname : '';
+  const resolved = resolvePage(settings, page);
+  const hostname = resolved.url?.hostname || '';
+  const frameBlocked = child && (!settings.translateFrames || resolvePage(settings, sender.url || '').policy === 'never');
+  const scopedSettings = edited => ({ ...pageSettings(edited, page), frameBlocked });
   switch (message.type) {
-    case 'settings': return ui ? settings : pageSettings(settings, hostname);
+    case 'settings': return ui ? settings : scopedSettings(settings);
+    case 'frame-state': {
+      if (!child || frameBlocked || sender.tab?.id == null) return null;
+      const result = await ext.tabs.sendMessage(sender.tab.id, { type: 'page-state' }, { frameId: 0 }).catch(() => null);
+      return result?.value || null;
+    }
+    case 'sync-frames': {
+      if (ui || child || sender.tab?.id == null || !settings.translateFrames) return null;
+      await ext.tabs.sendMessage(sender.tab.id, { type: 'sync-frame' }).catch(() => {});
+      return null;
+    }
     case 'translate': {
       const { texts, target } = message;
       if (!own(languages, target) || !Array.isArray(texts) || !texts.length || texts.length > 20 ||
@@ -50,36 +73,42 @@ async function handleMessage(message, sender, onResult) {
           texts.reduce((sum, text) => sum + text.length, 0) > 160000) {
         throw new Error('待翻译的文本或语言超出支持范围。');
       }
-      if (hostname && settings.sites[hostname] === 'never') {
+      if (resolved.policy === 'never' || frameBlocked) {
         throw new Error('此网站已设为永不翻译。');
       }
-      if (message.revision != null && message.revision !== modelRevision(settings)) {
+      const effective = effectiveSettings(settings, resolved);
+      if (message.revision != null && message.revision !== modelRevision(effective)) {
         throw new Error('翻译模型已更新，请重试。');
       }
-      return translate(settings, target, texts, undefined, false, message.context, onResult);
+      return translate(effective, target, texts, undefined, false, message.context, onResult);
     }
     case 'options':
       return optionPages.includes(message.section)
-        ? ext.tabs.create({ url: ext.runtime.getURL(`options.html#${message.section}`) }).then(() => null)
+        ? ext.tabs.create({ url: optionsUrl(message.section, message) }).then(() => null)
         : ext.runtime.openOptionsPage();
     case 'preferences': {
       const allowed = ui ? prefs : pagePrefs;
-      if (!ui && !hostname) throw new Error('无法识别当前网站。');
-      const edited = await update(current => Object.assign(current, Object.fromEntries(
-        Object.entries(message.patch || {}).filter(([key]) => allowed.includes(key)),
-      )));
-      return ui ? edited : pageSettings(edited, hostname);
+      if (!ui && (!hostname || child)) throw new Error('请在主页面中修改偏好。');
+      const patch = Object.fromEntries(Object.entries(message.patch || {}).filter(([key]) => allowed.includes(key)));
+      const edited = await update(current => applyPagePreferences(current, ui ? null : resolvePage(current, page), patch));
+      return ui ? edited : scopedSettings(edited);
     }
     case 'site-rule': {
       const host = ui ? message.host : hostname;
       const edited = await update(current => {
         if (!/^[-\w.:[\]]{1,255}$/.test(host || '')) return current;
+        if (child) return current;
+        const profile = !ui && resolvePage(current, page).profiles.findLast(item => own(item.overrides, 'policy'));
+        if (profile) {
+          profile.overrides.policy = message.rule || 'manual';
+          return current;
+        }
         const sites = { ...current.sites };
         delete sites[host];
         if (message.rule) Object.defineProperty(sites, host, { value: message.rule, enumerable: true });
         return { ...current, sites };
       });
-      return ui ? edited : pageSettings(edited, hostname);
+      return ui ? edited : scopedSettings(edited);
     }
     case 'floating-site': {
       const host = ui ? message.host : hostname;
@@ -89,12 +118,32 @@ async function handleMessage(message, sender, onResult) {
         hiddenFloatingSites: [...(message.hidden ? [host] : []),
           ...current.hiddenFloatingSites.filter(item => item !== host)],
       }));
-      return ui ? edited : pageSettings(edited, hostname);
+      return ui ? edited : scopedSettings(edited);
     }
     default:
       if (!ui) throw new Error('请在扩展设置中执行此操作。');
   }
   switch (message.type) {
+    case 'site-profile-save': return update(current => {
+      const profile = normalizeSiteProfile(message.profile, current);
+      if (current.siteProfiles.some(item => item.pattern === profile.pattern && item.pattern !== message.previous)) {
+        throw new Error('已存在相同的网址规则。');
+      }
+      const remaining = current.siteProfiles.filter(item => item.pattern !== message.previous);
+      if (remaining.length >= 300) throw new Error('最多可保存 300 条网址规则。');
+      return { ...current, siteProfiles: [...remaining, profile] };
+    });
+    case 'site-profile-delete':
+      return update(current => ({ ...current, siteProfiles: current.siteProfiles.filter(item => item.pattern !== message.pattern) }));
+    case 'settings-import': return update(current => {
+      const restored = restoreSettings(message.backup);
+      for (const provider of restored.providers) {
+        const previous = current.providers.find(item => item.id === provider.id);
+        const same = previous && ['protocol', 'baseUrl', 'apiKey'].every(key => previous[key] === provider[key]);
+        provider.updated = same ? previous.updated : Date.now();
+      }
+      return restored;
+    });
     case 'language-rule':
       return update(current => {
         const languageRules = { ...current.languageRules };
@@ -114,8 +163,12 @@ async function handleMessage(message, sender, onResult) {
             previous.apiKey === provider.apiKey) provider.updated = previous.updated;
           current.providers[index] = provider;
         }
-        if (message.replaceActive && current.activeModel === message.replaceActive.from) {
-          current.activeModel = message.replaceActive.to;
+        if (message.replaceActive) {
+          const { from, to } = message.replaceActive;
+          if (current.activeModel === from) current.activeModel = to;
+          for (const profile of current.siteProfiles) {
+            if (profile.overrides.activeModel === from) profile.overrides.activeModel = to;
+          }
         }
         const active = activeModel(current);
         if ((!active || needsKey(active.provider)) && provider.models.length && !needsKey(provider)) {
@@ -164,9 +217,9 @@ ext.runtime.onConnect.addListener(port => {
   port.onMessage.addListener(receive);
 });
 
-function activate(tab, action, details = {}) {
+function activate(tab, action, details = {}, frameId = 0) {
   if (tab?.id != null) {
-    ext.tabs.sendMessage(tab.id, { type: 'page-action', action, ...details }, { frameId: 0 }).catch(() => {});
+    ext.tabs.sendMessage(tab.id, { type: 'page-action', action, ...details }, { frameId }).catch(() => {});
   }
 }
 
@@ -181,8 +234,15 @@ if (ext.contextMenus) {
       ext.contextMenus.create({ id: 'toggle', title: '翻译网页 / 显示原文', contexts: ['page'] });
       ext.contextMenus.create({ id: 'selection', title: '翻译所选文字', contexts: ['selection'] });
       ext.contextMenus.create({ id: 'input', title: '翻译当前输入框', contexts: ['editable'] });
+      ext.contextMenus.create({ id: 'image', title: '翻译这张图片', contexts: ['image'],
+        targetUrlPatterns: ['http://*/*', 'https://*/*'] });
     }).catch(() => {});
   });
-  ext.contextMenus.onClicked.addListener((info, tab) =>
-    activate(tab, info.menuItemId, { text: info.selectionText }));
+  ext.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId === 'image') {
+      ext.tabs.create({ url: optionsUrl('files', { imageUrl: info.srcUrl }) }).catch(() => {});
+    } else {
+      activate(tab, info.menuItemId, { text: info.selectionText }, info.menuItemId === 'toggle' ? 0 : info.frameId ?? 0);
+    }
+  });
 }

@@ -166,8 +166,11 @@ textarea { resize: vertical; }
 .file-picker:focus-within { outline: 2px solid #777887; outline-offset: 3px; }
 .file-picker input { position: absolute; inset: 0; opacity: 0; padding: 0; width: 100%; cursor: pointer; }
 .file-picker strong { overflow-wrap: anywhere; }
+.online-file { display: grid; gap: 6px; font-weight: 610; }
+.online-file input { width: 100%; font-weight: 400; }
 .file-icon { width: 39px; height: 39px; margin-bottom: 2px; }
-.file-result { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+.file-result { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.file-result .form-status { flex: 1 1 13rem; }
 .file-result:has(.form-status:empty):has(a[hidden]) { display: none; }
 .text-panes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .text-panes label { display: grid; gap: 9px; padding: 12px; background: var(--soft); border-radius: 14px; font-weight: 610; }

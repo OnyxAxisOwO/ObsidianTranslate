@@ -1,6 +1,7 @@
 const timestamps = /^\s*(?:\d{1,2}:)?\d{2}:\d{2}[.,]\d{3}\s*-->/;
 
 export function parseFile(source, extension) {
+  if (extension === 'ass') return parseAss(source);
   const newline = source.includes('\r\n') ? '\r\n' : '\n';
   const ending = source.match(/(?:\r?\n)+$/)?.[0] || '';
   const blocks = source.slice(0, source.length - ending.length).split(/(\r?\n\s*\r?\n)/);
@@ -23,5 +24,44 @@ export function parseFile(source, extension) {
       result[index] = prefix + (bilingual ? original + newline : '') + translations[i].replace(/\r?\n/g, newline);
     });
     return result.join('') + ending;
+  } };
+}
+
+function parseAss(source) {
+  const lines = source.split(/(\r?\n)/);
+  const parts = [];
+  let events = false;
+  let fields = 0;
+  for (let index = 0; index < lines.length; index += 2) {
+    const line = lines[index];
+    const section = line.trim().match(/^\[([^\]]+)\]$/);
+    if (section) {
+      events = section[1].toLowerCase() === 'events';
+      fields = 0;
+    }
+    if (!events) continue;
+    const format = line.match(/^\s*Format:\s*(.+)$/i);
+    if (format) {
+      const columns = format[1].split(',').map(value => value.trim().toLowerCase());
+      fields = columns.at(-1) === 'text' ? columns.length : 0;
+    }
+    const dialogue = line.match(/^\s*Dialogue:\s*/i);
+    if (!dialogue || !fields) continue;
+    let offset = dialogue[0].length;
+    for (let i = 1; i < fields && offset > 0; i++) offset = line.indexOf(',', offset) + 1;
+    if (!offset) continue;
+    const raw = line.slice(offset);
+    if (/\{[^}]*\\p[1-9][^}]*\}/i.test(raw)) continue;
+    const original = raw.replace(/\{[^}]*\}/g, '').replace(/\\[nN]/g, '\n').replace(/\\h/g, ' ').trim();
+    if (/\p{L}/u.test(original)) parts.push({ index, prefix: line.slice(0, offset), raw, original });
+  }
+  return { parts, format(translations, bilingual) {
+    const result = [...lines];
+    parts.forEach(({ index, prefix, raw }, i) => {
+      const value = translations[i].replace(/\r?\n/g, '\\N').replace(/[{}]/g, character => character === '{' ? '｛' : '｝');
+      const leading = raw.match(/^(?:\{[^}]*\})+/)?.[0] || '';
+      result[index] = prefix + (bilingual ? raw + '\\N' : leading) + value;
+    });
+    return result.join('');
   } };
 }

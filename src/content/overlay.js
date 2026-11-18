@@ -35,7 +35,7 @@ svg { width: 18px; height: 18px; vertical-align: middle; flex: none; }
 .tip { left: 0; top: 0; max-width: min(350px, calc(100vw - 16px)); max-height: min(48vh, 420px); padding: 5px; overflow: auto; }
 .tip header { display: flex; align-items: center; justify-content: space-between; padding-left: 9px; font-weight: 650; }
 .tip p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 3px 9px 8px; }
-.caption { position: fixed; transform: translate(-50%, -100%); text-align: center; color: white; background: #17171be8; padding: .32em .6em; border-radius: 6px; font: 650 clamp(13px, 2vw, 23px)/1.45 -apple-system, sans-serif; white-space: pre-line; max-width: 82vw; }
+.caption { position: fixed; width: max-content; transform: translate(-50%, -100%); text-align: center; color: white; background: #17171be8; padding: .32em .6em; border-radius: 6px; font: 650 clamp(13px, 2vw, 23px)/1.45 -apple-system, sans-serif; white-space: pre-line; overflow-wrap: anywhere; }
 [hidden] { display: none !important; }
 @keyframes reveal { from { opacity: 0; transform: translateY(6px) scale(.98); } }
 @media (prefers-color-scheme: dark) { .root { --surface: #222225; --text: #fafafa; --muted: #b0b0b8; --soft: #343437; --strong: #fff; --on-strong: #171719; } }
@@ -132,15 +132,37 @@ ${panelStyle}</style><div class="root"><div class="anchor" data-side="right" hid
       this.selection({ left: innerWidth / 2 - 110, bottom: 40 }, text);
     },
     hideSelection() { tip.hidden = true; },
-    caption(rect, text, fullscreen) {
+    caption(rect, text, fullscreen, original) {
       const parent = fullscreen && fullscreen.tagName !== 'VIDEO' ? fullscreen : document.documentElement;
       if (host.parentNode !== parent) parent.append(host);
       caption.hidden = !text;
       if (!text) return;
-      caption.textContent = text;
-      caption.style.left = `${rect.left + rect.width / 2}px`;
-      caption.style.top = `${rect.bottom - Math.min(85, rect.height * .22)}px`;
-      caption.style.maxWidth = Math.max(120, rect.width * .9) + 'px';
+      if (caption.textContent !== text) caption.textContent = text;
+      const left = Math.max(0, rect.left);
+      const right = Math.min(innerWidth, rect.right);
+      const top = Math.max(0, rect.top);
+      const bottom = Math.min(innerHeight, rect.bottom);
+      const gap = 8;
+      if (right - left <= 2 * gap || bottom - top <= 2 * gap) {
+        caption.hidden = true;
+        return;
+      }
+      caption.style.maxWidth = (right - left - 2 * gap) + 'px';
+      const height = caption.offsetHeight;
+      const inset = caption.offsetWidth / 2 + gap;
+      const center = original ? (original.left + original.right) / 2 : (left + right) / 2;
+      let baseline = Math.min(bottom - gap, rect.bottom - Math.min(85, rect.height * .22));
+      if (original) {
+        const above = Math.min(bottom - gap, original.top - gap);
+        const below = Math.max(top + gap, original.bottom + gap) + height;
+        baseline = above - height >= top + gap ? above : below <= bottom - gap ? below : null;
+      }
+      if (baseline == null || baseline - height < top + gap) {
+        caption.hidden = true;
+        return;
+      }
+      caption.style.left = Math.max(left + inset, Math.min(right - inset, center)) + 'px';
+      caption.style.top = baseline + 'px';
     },
   };
 }
