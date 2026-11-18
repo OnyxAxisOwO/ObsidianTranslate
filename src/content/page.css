@@ -1,11 +1,15 @@
 [data-obsidian-translation] {
-  display: block !important;
+  display: inline !important;
   color: inherit;
   font: inherit;
-  white-space: pre-line;
-  overflow-wrap: anywhere;
-  margin-block-start: .45em;
+  white-space: inherit;
+  overflow-wrap: inherit;
+  word-break: inherit;
   text-decoration: none;
+}
+[data-obsidian-translation][data-layout="block"] {
+  display: block !important;
+  margin-block-start: .45em;
 }
 [data-obsidian-translation][data-view="bilingual"][data-style="soft"] { opacity: .8; }
 [data-obsidian-translation][data-view="bilingual"][data-style="accent"] {
@@ -13,14 +17,10 @@
   border-radius: .3em;
   padding: .15em .35em;
 }
-[data-obsidian-translation][data-view="bilingual"][data-first] { margin-block: 0 .45em; }
-[data-obsidian-translation][data-view="translation"] { margin-block-start: 0; }
-[data-obsidian-translation][data-layout="inline"][data-view="translation"] { display: inline !important; }
+[data-obsidian-translation][data-layout="block"][data-first] { margin-block: 0 .45em; }
+[data-obsidian-translation][data-layout="inline"][data-view="bilingual"] { margin-inline-start: .4em; }
+[data-obsidian-translation][data-layout="inline"][data-first] { margin-inline: 0 .4em; }
 [data-obsidian-source][hidden], [data-obsidian-translation][hidden] { display: none !important; }
-:is(a, button, label, summary) > [data-obsidian-translation]:not([data-view="translation"]) {
-  display: inline !important;
-  margin: 0 0 0 .4em;
-}
 
 [data-obsidian-loading] {
   display: inline-flex !important;

@@ -1,14 +1,18 @@
 import { icon } from './icons.js';
-import { languages } from './settings.js';
+import { bilingualLayouts, languages } from './settings.js';
 
 const languageChoices = Object.entries(languages).map(([value, [label]]) => ({ value, label }));
+const switches = [{ value: 'false', label: '关闭' }, { value: 'true', label: '开启' }];
 const choices = {
   source: [{ value: 'auto', label: '自动识别' }, ...languageChoices],
   target: languageChoices,
   view: [{ value: 'translation', label: '仅译文' }, { value: 'bilingual', label: '双语对照' }],
   scope: [{ value: 'reading', label: '正文' }, { value: 'whole', label: '整页' }],
   site: [{ value: '', label: '手动' }, { value: 'always', label: '总是翻译' }, { value: 'never', label: '永不翻译' }],
-  captions: [{ value: 'false', label: '关闭' }, { value: 'true', label: '开启' }],
+  captions: switches,
+  richText: switches,
+  protectControls: switches,
+  bilingualLayout: Object.entries(bilingualLayouts).map(([value, label]) => ({ value, label })),
 };
 
 function field(key, label) {
@@ -32,7 +36,8 @@ export function mountPanel(host, emit) {
     <section class="ot-details" aria-label="高级面板" hidden>
       <header class="ot-head"><span class="ot-heading">高级面板</span></header>
       <div class="ot-fields">${field('source', '源语言')}${field('view', '显示方式')}${field('scope', '翻译范围')}
-        ${field('site', '此网站')}${field('captions', '双语字幕')}</div>
+        ${field('site', '此网站')}${field('richText', '富文本翻译')}${field('protectControls', '保护网页控件')}
+        ${field('bilingualLayout', '双语排版')}${field('captions', '双语字幕')}</div>
       <div class="ot-links">${button('models', '服务商与模型', 'stack', 'ot-link')}
         ${button('text', '翻译一段文字', 'translate', 'ot-link')}
         ${button('toggle-floating-site', '在此网站隐藏悬浮窗', 'close', 'ot-link')}
@@ -99,6 +104,9 @@ export function mountPanel(host, emit) {
       fields.site.value = page?.site || '';
       fields.site.disabled = !page?.hostname;
       fields.captions.value = String(settings.captions);
+      fields.richText.value = String(settings.richText);
+      fields.protectControls.value = String(settings.protectControls);
+      fields.bilingualLayout.value = settings.bilingualLayout;
       const blocked = page?.site === 'never';
       const exportCaptions = host.querySelector('[data-panel-action="export-captions"]');
       exportCaptions.hidden = !page?.video;

@@ -1,9 +1,10 @@
-import { defaults, languageCode, promptDefaults } from '../shared/settings.js';
+import { defaults, languageCode, pagePreferenceValue, profiledPreferences, promptDefaults } from '../shared/settings.js';
 import { ext, reply, request, requestParagraphs } from '../shared/webext.js';
 import { connectCaptions } from './captions.js';
 import { overlay } from './overlay.js';
+import { pageControls, protectedContent, renderRun, restoreRun, sameRuns, textRuns } from './rich-text.js';
 
-const reading = 'p,h1,h2,h3,h4,h5,h6,li,dt,dd,td,th,figcaption,caption,blockquote,summary';
+const reading = 'p,h1,h2,h3,h4,h5,h6,li,dt,dd,td,th,figcaption,caption,blockquote,summary,.gallerytext,.thumbcaption';
 const block = `${reading},div,span,a,button,label`;
 const ignored = 'script,style,noscript,textarea,input,select,option,pre,code,svg,math,[hidden],[inert],[aria-hidden="true"],[contenteditable]:not([contenteditable="false"]),[translate="no"],[data-obsidian-interface]';
 const ownedNodes = '[data-obsidian-loading],[data-obsidian-translation],[data-obsidian-source],[data-obsidian-interface]';
@@ -128,63 +129,18 @@ function selectionText() {
   return { text, rect: current.getRangeAt(0).getBoundingClientRect() };
 }
 
-function sourceText(element, links) {
+function sourceText(element) {
   let text = '';
   for (const child of element.childNodes) {
     if (child.nodeType === Node.TEXT_NODE) {
       text += child.data;
-    } else if (child instanceof Element && !child.matches(ignored)) {
-      if (child.tagName === 'BR') {
-        text += '\n';
-      } else if (links && child.matches('a[href]')) {
-        const label = sourceText(child);
-        if (!label.trim()) continue;
-        const index = links.push(child) - 1;
-        text += `<ot-link-${index}>${label}</ot-link-${index}>`;
-      } else {
-        text += sourceText(child, links);
-      }
+    } else if (child instanceof Element && !child.matches(ignored + ',' + protectedContent)) {
+      text += sourceText(child);
+    } else if (child instanceof Element && child.tagName === 'BR') {
+      text += '\n';
     }
   }
   return text;
-}
-
-function translatedLink(original, label) {
-  const link = document.createElement('a');
-  for (const name of ['href', 'target', 'rel', 'download']) {
-    const value = original.getAttribute(name);
-    if (value != null && !(name === 'href' && /^\s*(javascript|data):/i.test(value))) link.setAttribute(name, value);
-  }
-  link.textContent = label;
-  link.setAttribute('aria-label', label === '↗' ? original.textContent.trim() : label);
-  link.addEventListener('click', event => {
-    if (event.button || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
-    event.preventDefault();
-    original.click();
-  });
-  return link;
-}
-
-function translatedContents(output, text, links) {
-  if (!links.length) {
-    output.textContent = text;
-    return;
-  }
-  const stripTags = value => value.replace(/<\/?ot-link-\d+>/gi, '');
-  const used = new Set();
-  let offset = 0;
-  for (const match of text.matchAll(/<ot-link-(\d+)>([\s\S]*?)<\/ot-link-\1>/gi)) {
-    output.append(stripTags(text.slice(offset, match.index)));
-    const index = Number(match[1]);
-    const label = stripTags(match[2]);
-    output.append(links[index] ? translatedLink(links[index], label) : label);
-    used.add(index);
-    offset = match.index + match[0].length;
-  }
-  output.append(stripTags(text.slice(offset)));
-  for (const [index, original] of links.entries()) {
-    if (!used.has(index)) output.append(' ', translatedLink(original, '↗'));
-  }
 }
 
 function inScope(el) {
@@ -196,6 +152,7 @@ function inScope(el) {
 
 function qualifies(el, force = false) {
   if (!el.isConnected || el.closest(ignored) || el.closest('[role="dialog"][aria-modal="true"]')) return false;
+  if (el.closest(protectedContent + ',' + ownedNodes) || (settings.protectControls && el.closest(pageControls))) return false;
   if (exclude && (el.closest(exclude) || el.querySelector(exclude))) return false;
   if (!force && !inScope(el)) return false;
   if (el.closest('.vector-toc')) {
@@ -217,7 +174,9 @@ function clearLoading(row) {
 function updateLoading(el, row) {
   if (!row) return;
   const style = settings.loadingStyle;
-  if (style === 'off' || !el.isConnected || (!row.pending && (paused || !urgent.has(el)))) {
+  if (style === 'off' || !el.isConnected || row.parts.length !== 1 || row.parts[0].parent !== el ||
+      el.closest(pageControls + ',a,label,td,th,caption,figcaption,.gallerytext,.thumbcaption') ||
+      (!row.pending && (paused || !urgent.has(el)))) {
     clearLoading(row);
     return;
   }
@@ -240,83 +199,34 @@ function updateLoading(el, row) {
   if (indicator.parentNode !== el) el.append(indicator);
 }
 
-function erase(el, row) {
+function erase(row) {
   clearLoading(row);
-  row.output?.remove();
-  if (row.source?.parentNode === el) row.source.replaceWith(...row.source.childNodes);
-  row.source = row.output = null;
+  for (const part of row.parts) restoreRun(part);
 }
 
 function render(el, row) {
-  if (!row.text || !el.isConnected) return;
-  if (row.text === row.original) return erase(el, row);
-  clearLoading(row);
-  if (view === 'translation') {
-    if (row.source?.parentNode !== el) {
-      row.source = document.createElement('span');
-      row.source.dataset.obsidianSource = '';
-      row.source.hidden = true;
-      const originals = [...el.childNodes].filter(node => node !== row.output);
-      row.source.append(...originals);
-      el.prepend(row.source);
-    }
-  } else if (row.source?.parentNode === el) {
-    row.source.replaceWith(...row.source.childNodes);
-    row.source = null;
-  }
-  if (!row.output) {
-    row.output = document.createElement('span');
-    row.output.dataset.obsidianTranslation = '';
-    row.output.translate = false;
-    row.output.lang = settings.target;
-    row.output.dir = 'auto';
-    translatedContents(row.output, row.text, row.links);
-  }
-  if (row.output.parentNode !== el) el.append(row.output);
-  row.output.dataset.view = view;
-  row.output.dataset.style = settings.style;
-  if (el.matches(tocHeading + ', .vector-toc-text, .ext-discussiontools-init-sidebar-meta')) {
-    row.output.dataset.layout = 'inline';
-  }
-  if (view === 'bilingual' && settings.order === 'translation-first') {
-    if (row.output !== el.firstChild) el.prepend(row.output);
-    row.output.dataset.first = '';
-  } else {
-    if (row.output !== el.lastChild) el.append(row.output);
-    delete row.output.dataset.first;
-  }
-}
-
-function readOriginal(el, row, links) {
-  if (row?.source?.parentNode === el) {
-    const children = [...el.childNodes];
-    if (children.every(node => node === row.source || node === row.output)) return sourceText(row.source, links).trim();
-    erase(el, row);
-  }
-  return sourceText(el, links).trim();
+  if (!row.done || !el.isConnected) return;
+  const { target, style, order, bilingualLayout } = settings;
+  const forceInline = row.parts.length > 1 || el.matches(tocHeading + ', .vector-toc-text, .ext-discussiontools-init-sidebar-meta');
+  for (const part of row.parts) renderRun(part, { view, target, style, order, bilingualLayout, forceInline });
 }
 
 function add(el, force = false) {
-  if (!qualifies(el, force)) return;
   const old = rows.get(el);
-  const links = [];
-  const original = readOriginal(el, old, links);
-  if (old && original === old.original && links.length === old.links.length &&
-      links.every((link, i) => link === old.links[i])) {
-    if (old.text && old.output?.parentNode !== el && old.text !== old.original) render(el, old);
+  if (!qualifies(el, force)) {
+    if (old) removeRow(el, old);
     return;
   }
-  if (old) {
-    if (old.text) translated = Math.max(0, translated - 1);
-    erase(el, old);
-    queue.delete(el);
-    urgent.delete(el);
-    near.unobserve(el);
-    rows.delete(el);
+  const skip = settings.protectControls ? ignored + ',' + pageControls : ignored;
+  const parts = textRuns(el, { rich: settings.richText, skip, limit: settings.maxLength });
+  if (old && sameRuns(old.parts, parts)) {
+    if (old.done && old.parts.some(part => part.output && part.output.parentNode !== part.parent)) render(el, old);
+    return;
   }
-  if (original.length < (force || scope === 'whole' ? 1 : 2) || original.length > 100000 || !/\p{L}/u.test(original)) return;
+  if (old) removeRow(el, old);
+  if (!parts.some(part => part.original.length >= (force || scope === 'whole' ? 1 : 2))) return;
   if (!force && el.getClientRects().length === 0) return;
-  const row = { original, links };
+  const row = { parts, next: 0, remaining: parts.length, pending: 0, done: false };
   rows.set(el, row);
   queue.add(el);
   if (force) {
@@ -329,7 +239,7 @@ function add(el, force = false) {
 function scan(root) {
   if (!(root instanceof Element) || !root.isConnected || root.closest(ignored)) return;
   const selector = scope === 'whole' || include ? block : reading;
-  const nearby = root.closest(selector);
+  const nearby = root.closest(reading) || root.closest(selector);
   if (nearby) add(nearby);
   for (const el of root.querySelectorAll(selector)) add(el);
 }
@@ -343,7 +253,7 @@ function reset() {
   firstBatch = true;
   clearTimeout(pumpTimer);
   near.disconnect();
-  for (const [el, row] of rows) erase(el, row);
+  for (const row of rows.values()) erase(row);
   rows.clear();
   queue.clear();
   urgent.clear();
@@ -399,18 +309,36 @@ function pauseAfterError(message) {
   if (!running) ui.hint(message);
 }
 
+function removeRow(el, row) {
+  if (row.done) translated = Math.max(0, translated - 1);
+  urgentlyRemove(el);
+  erase(row);
+  rows.delete(el);
+}
+
+function failRow(el, row) {
+  if (rows.get(el) !== row) return false;
+  removeRow(el, row);
+  failures++;
+  return true;
+}
+
 async function pump() {
   if (paused || held >= pumpCapacity() || (!running && !urgent.size)) return;
   const chunk = [];
   let length = 0;
   const visible = urgent.size > 0;
   const candidates = visible ? urgent : queue;
-  for (const el of candidates) {
+  collect: for (const el of candidates) {
     const row = rows.get(el);
     if (row && el.isConnected) {
-      if (chunk.length && (firstBatch || chunk.length >= settings.batchSize || length + row.original.length > settings.maxLength)) break;
-      chunk.push([el, row]);
-      length += row.original.length;
+      while (row.next < row.parts.length) {
+        const part = row.parts[row.next];
+        if (chunk.length && (firstBatch || chunk.length >= settings.batchSize || length + part.input.length > settings.maxLength)) break collect;
+        chunk.push({ el, row, part });
+        length += part.input.length;
+        row.next++;
+      }
     }
     urgentlyRemove(el);
   }
@@ -419,8 +347,8 @@ async function pump() {
   nextDispatch = performance.now() + 1000 / (settings.requestsPerSecond ?? 2);
   const version = generation;
   held++;
-  for (const [el, row] of chunk) {
-    row.pending = true;
+  for (const { el, row } of chunk) {
+    row.pending++;
     updateLoading(el, row);
   }
   status();
@@ -428,39 +356,35 @@ async function pump() {
   const completed = new Set();
   let allCached = true;
   try {
-    await requestParagraphs({ texts: chunk.map(([, row]) => row.original),
+    await requestParagraphs({ texts: chunk.map(({ part }) => part.input),
       target: settings.target, revision: settings.revision, context: context() }, (i, result) => {
       if (version !== generation || completed.has(i)) return;
       completed.add(i);
       allCached &&= result.cached === true;
-      const [el, row] = chunk[i];
-      row.pending = false;
-      clearLoading(row);
+      const { el, row, part } = chunk[i];
+      if (--row.pending === 0) clearLoading(row);
       if (!el.isConnected || rows.get(el) !== row) return;
       if (result.error) {
-        rows.delete(el);
-        failures++;
-        pauseAfterError(result.error);
+        if (failRow(el, row)) pauseAfterError(result.error);
       } else {
-        row.text = result.text;
-        translated++;
-        render(el, row);
+        part.text = result.text;
+        if (--row.remaining === 0) {
+          row.done = true;
+          translated++;
+          render(el, row);
+        }
       }
       if (!paused) status();
     }, translationRun.signal);
   } catch (error) {
     if (version !== generation) return;
-    for (const [i, [el, row]] of chunk.entries()) {
-      if (!completed.has(i) && rows.get(el) === row) {
-        rows.delete(el);
-        failures++;
-      }
+    for (const [i, { el, row }] of chunk.entries()) {
+      if (!completed.has(i)) failRow(el, row);
     }
     pauseAfterError(error.message);
   } finally {
-    for (const [, row] of chunk) {
-      row.pending = false;
-      clearLoading(row);
+    for (const [i, { row }] of chunk.entries()) {
+      if (!completed.has(i) && --row.pending === 0) clearLoading(row);
     }
     if (version === generation) {
       held--;
@@ -620,8 +544,8 @@ async function panelAction(action, value) {
     await request('preferences', { patch: { floating: false } });
     return sync();
   }
-  if (['source', 'target', 'activeModel', 'view', 'scope', 'captions'].includes(action)) {
-    await request('preferences', { patch: { [action]: action === 'captions' ? value === 'true' : value } });
+  if (profiledPreferences.includes(action)) {
+    await request('preferences', { patch: { [action]: pagePreferenceValue(action, value) } });
     return sync();
   }
   return handle(action);
@@ -645,9 +569,11 @@ async function sync(navigated = false) {
   const restart = previous.revision !== settings.revision || previous.target !== settings.target ||
     previousLanguage !== sourceLanguage() || previous.scope !== settings.scope ||
     previous.siteInclude !== settings.siteInclude || previous.siteExclude !== settings.siteExclude ||
+    previous.richText !== settings.richText || previous.protectControls !== settings.protectControls ||
     previous.maxLength !== settings.maxLength || previous.glossary !== settings.glossary ||
     Object.keys(promptDefaults).some(key => previous[key] !== settings[key]);
-  if (previous.view !== settings.view || previous.order !== settings.order || previous.style !== settings.style) {
+  if (previous.view !== settings.view || previous.order !== settings.order ||
+      previous.style !== settings.style || previous.bilingualLayout !== settings.bilingualLayout) {
     view = settings.view;
     for (const [el, row] of rows) render(el, row);
   }
@@ -716,7 +642,7 @@ const watcher = new MutationObserver(records => {
   for (const { target, addedNodes, removedNodes } of records) {
     const element = target instanceof Element ? target : target.parentElement;
     const el = element?.closest('[data-obsidian-source]')?.parentElement || element;
-    if (!el || el.closest(ignored)) continue;
+    if (!el || el.closest(ignored + ',' + ownedNodes)) continue;
     if ((addedNodes.length || removedNodes.length) &&
       [...addedNodes, ...removedNodes].every(node => node instanceof Element && node.matches(ownedNodes))) continue;
     changes.add(el);
@@ -726,9 +652,7 @@ const watcher = new MutationObserver(records => {
     mutationTimer = undefined;
     for (const [el, row] of rows) {
       if (el.isConnected) continue;
-      urgentlyRemove(el);
-      clearLoading(row);
-      rows.delete(el);
+      removeRow(el, row);
     }
     hasPrimary = !!document.querySelector(primary);
     for (const el of changes) scan(el);

@@ -38,6 +38,9 @@ export const defaults = {
   view: 'translation',
   order: 'original-first',
   style: 'soft',
+  richText: true,
+  protectControls: true,
+  bilingualLayout: 'auto',
   loadingStyle: 'spinner',
   loadingText: '翻译中…',
   scope: 'reading',
@@ -135,7 +138,13 @@ export function modelRevision(settings) {
   return active ? JSON.stringify([active.provider.id, active.provider.updated, active.model.id, active.model.parameters]) : '';
 }
 
-export const profiledPreferences = ['source', 'target', 'activeModel', 'scope', 'view', 'captions'];
+export const bilingualLayouts = { auto: '自动', block: '另起一行', inline: '同一行' };
+export const booleanPagePreferences = ['captions', 'richText', 'protectControls'];
+export const profiledPreferences = ['source', 'target', 'activeModel', 'scope', 'view', 'bilingualLayout', ...booleanPagePreferences];
+
+export function pagePreferenceValue(key, value) {
+  return booleanPagePreferences.includes(key) ? value === true || value === 'true' : value;
+}
 
 export function resolvePage(settings, value) {
   const url = pageAddress(value);
@@ -181,7 +190,10 @@ export function normalizeSiteProfile(input, settings) {
   if (own(languages, values.target)) overrides.target = values.target;
   if (['reading', 'whole'].includes(values.scope)) overrides.scope = values.scope;
   if (['translation', 'bilingual'].includes(values.view)) overrides.view = values.view;
-  if (typeof values.captions === 'boolean') overrides.captions = values.captions;
+  if (own(bilingualLayouts, values.bilingualLayout)) overrides.bilingualLayout = values.bilingualLayout;
+  for (const key of booleanPagePreferences) {
+    if (typeof values[key] === 'boolean') overrides[key] = values[key];
+  }
   if (values.activeModel && activeModel({ ...settings, activeModel: values.activeModel })) overrides.activeModel = values.activeModel;
   for (const selector of ['include', 'exclude']) {
     if (typeof values[selector] === 'string') overrides[selector] = text(values[selector], 500);
@@ -298,6 +310,7 @@ export function normalizeSettings(input = {}) {
   if (['bilingual', 'translation'].includes(input.view)) settings.view = input.view;
   if (['original-first', 'translation-first'].includes(input.order)) settings.order = input.order;
   if (['plain', 'soft', 'accent'].includes(input.style)) settings.style = input.style;
+  if (own(bilingualLayouts, input.bilingualLayout)) settings.bilingualLayout = input.bilingualLayout;
   if (own(loadingStyles, input.loadingStyle)) settings.loadingStyle = input.loadingStyle;
   settings.loadingText = text(input.loadingText, loadingTextLimit) || defaults.loadingText;
   if (['reading', 'whole'].includes(input.scope)) settings.scope = input.scope;
@@ -313,7 +326,7 @@ export function normalizeSettings(input = {}) {
   settings.hiddenFloatingSites = [...new Set(Array.isArray(input.hiddenFloatingSites)
     ? input.hiddenFloatingSites.filter(host => typeof host === 'string' && /^[-\w.:[\]]{1,255}$/.test(host)).slice(0, 300)
     : [])];
-  for (const key of ['floating', 'selection', 'hover', 'inputSpaces', 'captions', 'cache', 'translateFrames']) {
+  for (const key of ['floating', 'selection', 'hover', 'inputSpaces', 'cache', 'translateFrames', ...booleanPagePreferences]) {
     if (typeof input[key] === 'boolean') settings[key] = input[key];
   }
   settings.sites = Object.fromEntries(Object.entries(input.sites || {}).filter(([host, rule]) =>

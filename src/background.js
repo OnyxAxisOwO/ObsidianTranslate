@@ -1,12 +1,12 @@
 import { cache } from './cache.js';
 import { clearCache, discover, translate } from './translate.js';
 import { activeModel, applyPagePreferences, effectiveSettings, languages, modelKey, modelRevision, needsKey,
-  normalizeProvider, normalizeSettings, normalizeSiteProfile, own, pageSettings, promptDefaults, restoreSettings, resolvePage } from './shared/settings.js';
+  normalizeProvider, normalizeSettings, normalizeSiteProfile, own, pageSettings, profiledPreferences, promptDefaults, restoreSettings, resolvePage } from './shared/settings.js';
 import { ext, reply } from './shared/webext.js';
 import { pageAddress } from './shared/site-rules.js';
 
 const uiProtocol = ext.runtime.getURL('/');
-const pagePrefs = ['source', 'target', 'activeModel', 'view', 'scope', 'captions', 'floating'];
+const pagePrefs = [...profiledPreferences, 'floating'];
 const prefs = [...pagePrefs, 'inputTarget', 'order', 'style', 'loadingStyle', 'loadingText', 'maxLength', 'batchSize',
   'glossary', 'floatingSide', 'floatingPosition', 'floatingOpacity', 'selection', 'hover', 'inputSpaces', 'cache', 'translateFrames', ...Object.keys(promptDefaults)];
 const optionPages = ['models', 'reading', 'floating', 'text', 'files', 'advanced', 'advanced/models', 'advanced/prompts', 'advanced/rules', 'advanced/cache', 'advanced/backup'];

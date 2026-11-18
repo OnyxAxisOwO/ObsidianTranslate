@@ -1,4 +1,4 @@
-import { defaults, pageSettings } from '../shared/settings.js';
+import { defaults, pagePreferenceValue, pageSettings } from '../shared/settings.js';
 import style from '../shared/panel.css';
 import { mountPanel } from '../shared/panel.js';
 import { api, tabs } from './api.js';
@@ -65,7 +65,7 @@ async function act(action, value) {
       page = await pageRequest('page-setting', { action, value });
       settings = await api('settings');
     } else {
-      const patch = action === 'hide-floating-all' ? { floating: false } : { [action]: action === 'captions' ? value === 'true' : value };
+      const patch = action === 'hide-floating-all' ? { floating: false } : { [action]: pagePreferenceValue(action, value) };
       settings = await api('preferences', { patch });
     }
   } catch (problem) {

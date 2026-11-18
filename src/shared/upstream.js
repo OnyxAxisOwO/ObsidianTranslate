@@ -1,5 +1,6 @@
 import { needsKey, protocols } from './settings.js';
 import { translationMessages } from './prompts.js';
+import { decodeEntities, hasMarkup, providerMarkup, restoreProviderMarkup } from './markup.js';
 
 function endpoint(provider, route, query) {
   const url = new URL(provider.baseUrl);
@@ -113,26 +114,12 @@ export async function translateBatch(provider, model, settings, target, texts, c
   throw error;
 }
 
-const entities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0' };
-const escapeMarkup = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-function decodeMarkup(text) {
-  return text.replace(/&(amp|lt|gt|quot|apos|nbsp|#\d+|#x[\da-f]+);/gi, (entity, value) => {
-    if (value[0] !== '#') return entities[value.toLowerCase()];
-    const point = value[1].toLowerCase() === 'x' ? parseInt(value.slice(2), 16) : Number(value.slice(1));
-    return point <= 0x10ffff ? String.fromCodePoint(point) : entity;
-  });
-}
-
 async function translateMachine(provider, target, texts, source) {
   const { protocol } = provider;
   const route = protocols[protocol].route;
   const detected = source === 'auto' ? undefined : source;
-  // Our link markers use unique tag names. Encode them as real links for engines in HTML mode.
-  const hasLinks = texts.some(text => /<ot-link-\d+>/.test(text));
-  const encoded = hasLinks ? texts.map(text => escapeMarkup(text)
-    .replace(/&lt;ot-link-(\d+)&gt;/g, '<a href="#ot-link-$1">')
-    .replace(/&lt;\/ot-link-\d+&gt;/g, '</a>')) : texts;
+  const html = texts.some(hasMarkup);
+  const encoded = html ? texts.map(providerMarkup) : texts;
   let translated;
   if (protocol === 'deepl') {
     const codes = { 'zh-CN': 'ZH-HANS', 'zh-TW': 'ZH-HANT', en: 'EN-US', pt: 'PT-PT', no: 'NB' };
@@ -140,17 +127,17 @@ async function translateMachine(provider, target, texts, source) {
       text: encoded,
       target_lang: codes[target] || target.toUpperCase(),
       source_lang: detected?.startsWith('zh-') ? 'ZH' : detected === 'no' ? 'NB' : detected?.toUpperCase(),
-      tag_handling: hasLinks ? 'html' : undefined,
+      tag_handling: html ? 'html' : undefined,
     });
     translated = result.translations?.map(item => item.text);
   } else if (protocol === 'google') {
-    const result = await upstream(provider, route, { q: encoded, source: detected, target, format: hasLinks ? 'html' : 'text' });
+    const result = await upstream(provider, route, { q: encoded, source: detected, target, format: html ? 'html' : 'text' });
     translated = result.data?.translations?.map(item => item.translatedText);
   } else {
     const codes = { 'zh-CN': 'zh', 'zh-TW': 'zt', no: 'nb' };
     const result = await upstream(provider, route, {
       q: encoded, source: codes[detected] || detected || 'auto', target: codes[target] || target,
-      format: hasLinks ? 'html' : 'text', api_key: provider.apiKey || undefined,
+      format: html ? 'html' : 'text', api_key: provider.apiKey || undefined,
     });
     translated = Array.isArray(result.translatedText) ? result.translatedText : [result.translatedText];
   }
@@ -159,9 +146,6 @@ async function translateMachine(provider, target, texts, source) {
     throw new Error('翻译服务返回的译文数量或格式有误。');
   }
   return translated.map(text => {
-    if (!hasLinks) return (protocol === 'google' ? decodeMarkup(text) : text).trim();
-    const markers = text.replace(/<a\b[^>]*\bhref\s*=\s*["']#ot-link-(\d+)["'][^>]*>([\s\S]*?)<\/a>/gi,
-      (_, index, label) => '<ot-link-' + index + '>' + label + '</ot-link-' + index + '>');
-    return decodeMarkup(markers).trim();
+    return (html ? restoreProviderMarkup(text) : protocol === 'google' ? decodeEntities(text) : text).trim();
   });
 }

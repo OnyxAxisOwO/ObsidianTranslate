@@ -1,4 +1,5 @@
-import { activeModel, languages, loadingStyles, loadingTextLimit, modelKey, needsKey, promptDefaults, protocols, requestParameters } from '../shared/settings.js';
+import { activeModel, bilingualLayouts, booleanPagePreferences, languages, loadingStyles, loadingTextLimit, modelKey,
+  needsKey, pagePreferenceValue, promptDefaults, protocols, requestParameters } from '../shared/settings.js';
 import { icon } from '../shared/icons.js';
 import { api } from './api.js';
 import { escape, iconButton, languageOptions, option } from './helpers.js';
@@ -120,6 +121,9 @@ function renderReading() {
       ${select('view', '显示方式', '', showOptions('view', ['translation', '仅译文'], ['bilingual', '双语对照']))}
       ${select('order', '双语顺序', '', showOptions('order', ['original-first', '原文在前'], ['translation-first', '译文在前']))}
       ${select('style', '双语译文样式', '', showOptions('style', ['plain', '与正文相同'], ['soft', '淡化'], ['accent', '淡色底纹']))}
+      ${select('bilingualLayout', '双语排版', '自动模式会在表格、图注和其他空间紧凑的位置使用行内译文。', showOptions('bilingualLayout', ...Object.entries(bilingualLayouts)))}
+      ${toggle('richText', '富文本翻译', '保留译文中的粗体、斜体、上下标和行内样式。')}
+      ${toggle('protectControls', '保护网页控件', '跳过工具栏、标签、按钮和维基页面的编辑链接。')}
       ${select('loadingStyle', '翻译中提示', '显示在等待译文的段落后面。', showOptions('loadingStyle', ...Object.entries(loadingStyles)))}
       <div id="loading-text-row" ${settings.loadingStyle === 'text' ? '' : 'hidden'}>
         ${row('提示文字', '', `<input type="text" data-pref="loadingText" aria-label="提示文字" maxlength="${loadingTextLimit}" value="${escape(settings.loadingText)}">`)}
@@ -416,6 +420,9 @@ function profileForm(index) {
     <label>范围<select name="scope">${choose('scope', [['reading', '正文'], ['whole', '整页']])}</select></label>
     <label>显示<select name="view">${choose('view', [['translation', '仅译文'], ['bilingual', '双语对照']])}</select></label>
     <label>双语字幕<select name="captions">${choose('captions', [['true', '开启'], ['false', '关闭']])}</select></label>
+    <label>双语排版<select name="bilingualLayout">${choose('bilingualLayout', Object.entries(bilingualLayouts))}</select></label>
+    <label>富文本翻译<select name="richText">${choose('richText', [['true', '开启'], ['false', '关闭']])}</select></label>
+    <label>保护网页控件<select name="protectControls">${choose('protectControls', [['true', '开启'], ['false', '关闭']])}</select></label>
     <label>正文 CSS 选择器<input name="include" maxlength="500" value="${escape(profile.include)}" placeholder="例如 main .article"></label>
     <label>排除 CSS 选择器<input name="exclude" maxlength="500" value="${escape(profile.exclude)}" placeholder="例如 .advertisement, .references"></label>
     <div class="dialog-actions">${button('close', '取消', '', 'ghost')}<button class="button primary">保存</button></div>
@@ -742,7 +749,9 @@ document.addEventListener('submit', async event => {
           throw new Error(key === 'include' ? '正文 CSS 选择器格式无效。' : '排除 CSS 选择器格式无效。');
         }
       }
-      if (overrides.captions) overrides.captions = overrides.captions === 'true';
+      for (const key of booleanPagePreferences) {
+        if (Object.hasOwn(overrides, key)) overrides[key] = pagePreferenceValue(key, overrides[key]);
+      }
       if (!Object.keys(overrides).length) throw new Error('请设置至少一项规则。');
       settings = await api('site-profile-save', { profile: { pattern, overrides }, previous: form.dataset.previous });
       editor.close();
